@@ -1,0 +1,17 @@
+# Python / Backend
+backend/.venv/
+backend/__pycache__/
+*.pyc
+backend/health_detection.db
+backend/data/
+backend/weights/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Editor / OS
+.vscode/
+.DS_Store
+*.log
+backend/uploads/
