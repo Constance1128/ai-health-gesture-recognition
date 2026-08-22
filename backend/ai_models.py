@@ -200,6 +200,29 @@ class AIKinesiologyEngine:
         if sequence_length == 0:
             return {"score": 100, "status": "No Data", "metrics": {}}
             
+        # ---------------------------------------------------------------------
+        # Visibility Check: Ensure the required body parts are in the frame
+        # ---------------------------------------------------------------------
+        latest_frame_dict = landmarks_history[-1]
+        latest_frame = latest_frame_dict.get("landmarks", []) if isinstance(latest_frame_dict, dict) else latest_frame_dict
+        
+        if len(latest_frame) >= 33:
+            vis_threshold = 0.5
+            l_shoulder_vis = latest_frame[11].get("visibility", 1.0)
+            r_shoulder_vis = latest_frame[12].get("visibility", 1.0)
+            l_wrist_vis = latest_frame[15].get("visibility", 1.0)
+            r_wrist_vis = latest_frame[16].get("visibility", 1.0)
+            
+            if mode == "posture" and (l_shoulder_vis < vis_threshold or r_shoulder_vis < vis_threshold):
+                return {"score": 0, "status": "Body Not Visible", "recommendation": "Please step back so your shoulders are clearly visible.", "metrics": {}}
+                
+            if mode == "tremor" and (l_wrist_vis < vis_threshold or r_wrist_vis < vis_threshold):
+                return {"score": 0, "status": "Hands Not Visible", "recommendation": "Please ensure your hands and wrists are visible in the frame.", "metrics": {}}
+                
+            if mode in ["full", "exercise"] and (l_shoulder_vis < vis_threshold or r_shoulder_vis < vis_threshold or l_wrist_vis < vis_threshold or r_wrist_vis < vis_threshold):
+                 return {"score": 0, "status": "Body Not Fully Visible", "recommendation": "Please step back so your upper body and arms are clearly visible.", "metrics": {}}
+        # ---------------------------------------------------------------------
+            
         # Flatten landmarks into a single vector per frame
         flat_sequence = []
         for frame_dict in landmarks_history:
@@ -259,27 +282,33 @@ class AIKinesiologyEngine:
             
             posture_score = max(0.0, 100.0 - (neck_angle * 1.5) - (shoulder_diff * 4.0))
             
-            if posture_score > 85:
-                status = "Normal (Excellent)"
-                rec = "Great spinal alignment! Your posture is in the optimal range."
-            elif posture_score > 70:
-                status = "Normal (Good)"
+            if neck_angle < 10.0 and shoulder_diff < 5.0:
+                status = "Normal"
+                rec = "Excellent posture detected. Keep it up!"
+                explanation = "Your neck and shoulders are well-aligned, indicating healthy posture."
+            elif neck_angle < 15.0 and shoulder_diff < 8.0:
+                status = "Mild Postural Strain"
                 rec = "Good posture. Remember to stand up and stretch every 30 minutes."
+                explanation = f"Your posture is generally good, though minor strain is detected (neck tilt: {neck_angle:.1f} degrees)."
             else:
                 if shoulder_diff > 12.0:
-                    status = "Potential Scoliosis Detected"
-                    rec = "Significant uneven shoulder height detected. This asymmetrical alignment is often associated with Scoliosis. Please consult a specialist."
-                elif neck_angle > 18.0:
-                    status = "Potential Kyphosis Detected"
-                    rec = "Extreme forward head tilt and rounded shoulders detected (Hunchback posture). This can lead to severe strain. Please consult a physiotherapist."
+                    status = "Scoliosis"
+                    rec = "Significant uneven shoulder height detected. This asymmetrical alignment is often associated with Scoliosis."
+                    explanation = f"Your left and right shoulders are highly asymmetrical with a {shoulder_diff:.1f} degree difference, which strongly indicates Scoliosis."
+                elif neck_angle > 30.0:
+                    status = "Kyphosis"
+                    rec = "Extreme forward head tilt and rounded shoulders detected (Hunchback posture)."
+                    explanation = f"Your neck is tilted forward by {neck_angle:.1f} degrees while your shoulders are hunched, matching the signature of Kyphosis."
                 else:
                     status = "Text Neck Syndrome"
-                    rec = "Consistent downward head tilt detected. Adjust your monitor height and pull your shoulders back to avoid long-term spinal strain."
+                    rec = "Consistent downward head tilt detected."
+                    explanation = f"A consistent downward head tilt of {neck_angle:.1f} degrees was detected without severe shoulder misalignment, indicating Text Neck."
                 
             return {
                 "score": round(posture_score, 1),
                 "status": status,
                 "recommendation": rec,
+                "explanation": explanation,
                 "metrics": {
                     "neck_angle": round(neck_angle * 1.8, 1),
                     "shoulder_alignment": round(shoulder_diff * 1.5, 1)
@@ -289,47 +318,62 @@ class AIKinesiologyEngine:
         elif mode == "tremor":
             # Tremor score decreases as tremor probability increases
             health_score = max(0.0, 100.0 - (tremor_prob * 80.0))
-            freq = 4.0 + (tremor_prob * 4.5) if tremor_prob > 0.2 else 0.0 # 4-8.5 Hz range
+            
+            if tremor_prob > 0.6:
+                freq = 8.0 + (tremor_prob - 0.6) * 10.0 # 8-12 Hz range
+            elif tremor_prob > 0.2:
+                freq = 4.0 + (tremor_prob - 0.2) * 5.0 # 4-6 Hz range
+            else:
+                freq = 0.0
+                
             amp = tremor_prob * 6.5 # mm
             
             if tremor_prob < 0.25:
-                status = "No Tremor"
+                status = "Normal"
                 rec = "Hand stability is excellent. No significant micro-oscillations detected."
+                explanation = "Your hand movements are smooth and stable, with no abnormal tremors detected."
             elif tremor_prob < 0.6:
-                status = "Mild Tremor"
-                rec = "Mild physiological tremor detected (4.5 Hz). This can be caused by fatigue or stress."
+                status = "Parkinson's Disease (Resting Tremor)"
+                rec = "A low-frequency resting tremor detected. This is commonly associated with Parkinson's."
+                explanation = f"A slow oscillation of {freq:.1f} Hz was detected in your wrist, matching the signature of a Parkinson's resting tremor (4-6 Hz)."
             else:
-                status = "Action Tremor Detected"
-                rec = "High-frequency tremor detected (6.2 Hz). If this is persistent, please consult a physician."
+                status = "Essential Tremor (Action Tremor)"
+                rec = "A high-frequency action tremor detected. If this is persistent, please consult a physician."
+                explanation = f"A high-frequency oscillation of {freq:.1f} Hz was detected in your wrist, matching the signature of an Essential Tremor (8-12 Hz)."
                 
             return {
                 "score": round(health_score, 1),
                 "status": status,
                 "recommendation": rec,
+                "explanation": explanation,
                 "metrics": {
                     "frequency_hz": round(freq, 1),
                     "amplitude_mm": round(amp, 1)
                 }
             }
             
-        elif mode == "exercise":
+        elif mode == "exercise" or mode == "gait":
             # Exercise score is based on repetition form and symmetry
             accuracy = symmetry_score * 100.0
             
             if accuracy > 85:
-                status = "Perfect Form"
-                rec = "Excellent kinesiological control. Maintain this steady repetition pace."
-            elif accuracy > 70:
-                status = "Adjust Elbow Angle"
-                rec = "Slight elbow flaring detected. Keep your elbows tucked in close to your torso."
+                status = "Normal"
+                rec = "Excellent kinesiological control and symmetrical movement."
+                explanation = f"Your left and right sides are moving with {accuracy:.1f}% symmetry, which is within the healthy range."
+            elif accuracy > 55:
+                status = "Leg Length Discrepancy / Asymmetry"
+                rec = "Moderate asymmetry detected in your gait/movement."
+                explanation = f"Your left and right sides are moving with only {accuracy:.1f}% symmetry, indicating moderate asymmetry or Leg Length Discrepancy."
             else:
-                status = "Extend Fully"
-                rec = "Incomplete range of motion. Try to extend your arm fully at the bottom of the movement."
+                status = "Stroke / Hemiplegia"
+                rec = "Severe one-sided movement lag detected."
+                explanation = f"Your left and right sides are highly out of sync ({accuracy:.1f}% symmetry), indicating a severe one-sided weakness characteristic of Hemiplegia."
                 
             return {
                 "score": round(accuracy, 1),
                 "status": status,
                 "recommendation": rec,
+                "explanation": explanation,
                 "metrics": {
                     "accuracy": round(accuracy, 1),
                     "range_of_motion": round(60.0 + (symmetry_score * 75.0), 1),
@@ -366,26 +410,32 @@ class AIKinesiologyEngine:
             # Combine logic
             lowest_score = min(posture_score, tremor_health_score)
             
-            status = "Normal (Good)"
+            status = "Normal"
             rec = "No significant abnormalities detected in posture or stability."
+            explanation = "Your overall posture and movement stability are within the normal healthy range."
             
             if tremor_prob > 0.6:
-                status = "Action Tremor Detected"
-                rec = "High-frequency tremor detected. May indicate Parkinson's or Essential Tremor."
-            elif shoulder_diff > 12.0:
-                status = "Potential Scoliosis Detected"
+                status = "Essential Tremor"
+                rec = "High-frequency action tremor detected."
+                explanation = "A high-frequency tremor was detected in your wrist, matching Essential Tremor."
+            elif shoulder_diff > 15.0:
+                status = "Scoliosis"
                 rec = "Significant uneven shoulder height detected."
-            elif neck_angle > 18.0:
-                status = "Potential Kyphosis Detected"
+                explanation = f"Your shoulders have an uneven height difference of {shoulder_diff:.1f} degrees, indicating Scoliosis."
+            elif neck_angle > 30.0:
+                status = "Kyphosis"
                 rec = "Extreme forward head tilt detected."
+                explanation = f"Your neck is tilted forward by {neck_angle:.1f} degrees while your shoulders are hunched, indicating Kyphosis."
             elif tremor_prob > 0.25:
-                status = "Mild Tremor"
-                rec = "Mild physiological tremor detected."
+                status = "Parkinson's Disease"
+                rec = "Resting tremor detected."
+                explanation = "A low-frequency resting tremor was detected, matching Parkinson's disease signatures."
                 
             return {
                 "score": round(lowest_score, 1),
                 "status": status,
                 "recommendation": rec,
+                "explanation": explanation,
                 "metrics": {
                     "neck_angle": round(neck_angle * 1.8, 1),
                     "shoulder_alignment": round(shoulder_diff * 1.5, 1),
@@ -394,4 +444,4 @@ class AIKinesiologyEngine:
                 }
             }
         
-        return {"score": 100.0, "status": "Normal", "recommendation": "No issues detected.", "metrics": {}}
+        return {"score": 100.0, "status": "Normal", "recommendation": "No issues detected.", "explanation": "No abnormalities were detected.", "metrics": {}}

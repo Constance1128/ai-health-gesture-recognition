@@ -159,7 +159,7 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
     }
 
     const formData = new FormData();
-    formData.append('sender_email', currentUser.email);
+    formData.append('email', currentUser.email);
     formData.append('receiver_id', selectedDoctor.id.toString());
     if (messageInput.trim()) formData.append('content', messageInput.trim());
     if (file) formData.append('file', file);
@@ -356,12 +356,31 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                 ) : chatHistory.length === 0 ? (
                   <div className="text-center text-slate-400 mt-10">No messages yet. Send a message to start consulting.</div>
                 ) : (
-                  chatHistory.map(msg => {
+                  chatHistory.map((msg, index) => {
                     const isMe = msg.sender_id === currentUser.id;
+                    const msgDate = dayjs(msg.timestamp * 1000).startOf('day');
+                    const prevMsgDate = index > 0 ? dayjs(chatHistory[index - 1].timestamp * 1000).startOf('day') : null;
+                    const showDateDivider = !prevMsgDate || !msgDate.isSame(prevMsgDate, 'day');
+
+                    let dateLabel = msgDate.format('MMMM D, YYYY');
+                    if (msgDate.isSame(dayjs().startOf('day'), 'day')) {
+                        dateLabel = 'Today';
+                    } else if (msgDate.isSame(dayjs().subtract(1, 'day').startOf('day'), 'day')) {
+                        dateLabel = 'Yesterday';
+                    }
+
                     return (
-                      <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[70%] rounded-2xl p-3 relative group ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : (isDarkMode ? 'bg-slate-800 text-white rounded-tl-none' : 'bg-white border text-slate-800 rounded-tl-none')}`}>
-                          {msg.is_deleted ? (
+                      <React.Fragment key={msg.id}>
+                        {showDateDivider && (
+                          <div className="flex justify-center my-4">
+                            <div className="bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-full shadow-sm">
+                              {dateLabel}
+                            </div>
+                          </div>
+                        )}
+                        <div className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`max-w-[70%] rounded-2xl p-3 relative group ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : (isDarkMode ? 'bg-slate-800 text-white rounded-tl-none' : 'bg-white border text-slate-800 rounded-tl-none')}`}>
+                            {msg.is_deleted ? (
                             <Text className="italic text-slate-300">This message was deleted</Text>
                           ) : (
                             <>
@@ -391,6 +410,7 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                           )}
                         </div>
                       </div>
+                      </React.Fragment>
                     );
                   })
                 )}

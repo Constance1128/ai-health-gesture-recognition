@@ -16,7 +16,7 @@ if not os.path.exists(MODEL_PATH):
     # Try downloading it
     import urllib.request
     try:
-        url = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task'
+        url = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task'
         urllib.request.urlretrieve(url, MODEL_PATH)
     except Exception as e:
         print(f"Failed to download pose landmarker model: {e}")
@@ -121,6 +121,29 @@ class PoseTracker:
         angles = {}
             
         if len(landmarks) >= 33:
+            def get_pt(idx):
+                return [landmarks[idx]["x"], landmarks[idx]["y"]]
+            
+            # Left arm (shoulder 11, elbow 13, wrist 15)
+            angles["left_elbow"] = self.calculate_angle(get_pt(11), get_pt(13), get_pt(15))
+            # Right arm (shoulder 12, elbow 14, wrist 16)
+            angles["right_elbow"] = self.calculate_angle(get_pt(12), get_pt(14), get_pt(16))
+            # Left leg (hip 23, knee 25, ankle 27)
+            angles["left_knee"] = self.calculate_angle(get_pt(23), get_pt(25), get_pt(27))
+            # Right leg (hip 24, knee 26, ankle 28)
+            angles["right_knee"] = self.calculate_angle(get_pt(24), get_pt(26), get_pt(28))
+            
+        return {"landmarks": landmarks, "angles": angles, "is_fallback": is_fallback}
+
+    def process_client_landmarks(self, landmarks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Processes a list of 33 landmarks sent directly from the client.
+        Bypasses Base64 decoding and MediaPipe execution on the backend.
+        """
+        is_fallback = len(landmarks) < 33
+        angles = {}
+        
+        if not is_fallback:
             def get_pt(idx):
                 return [landmarks[idx]["x"], landmarks[idx]["y"]]
             

@@ -365,321 +365,356 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
         </Sider>
 
         {/* Main Content Area */}
-        <Content className="p-6 overflow-y-auto h-[calc(100vh-64px)]">
+        <div className="flex flex-col flex-1 h-[calc(100vh-64px)] min-w-0">
           {selectedPatient ? (
-            <div className="space-y-6 max-w-7xl mx-auto">
-              
-              {/* Selected Patient Profile Bar */}
-              <Card className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}>
-                <Row justify="space-between" align="middle" gutter={[16, 16]}>
-                  <Col>
-                    <Space size="middle">
-                      <Avatar size={48} className="bg-blue-100 text-blue-600 font-bold text-lg">
-                        {getInitials(selectedPatient.name)}
-                      </Avatar>
-                      <div>
-                        <Title level={4} className="m-0 font-bold">{selectedPatient.name}</Title>
-                        <Space split={<Divider type="vertical" />} className="text-xs text-slate-400">
-                          <span>Patient ID: #P-2026-{String(selectedPatient.id).padStart(4, '0')}</span>
-                          <span>Age: {selectedPatient.age}</span>
-                          <span>Gender: {selectedPatient.gender}</span>
+            <>
+              {/* Fixed Doctor Profile Bar */}
+              <div className="px-6 pt-6 pb-2 z-10 shrink-0">
+                <div className="max-w-7xl mx-auto w-full">
+                  <Card className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}>
+                    <Row justify="space-between" align="middle" gutter={[16, 16]}>
+                      <Col>
+                        <Space size="middle">
+                          <Avatar size={48} className="bg-blue-100 text-blue-600 font-bold text-lg">
+                            {getInitials(currentUser.name)}
+                          </Avatar>
+                          <div>
+                            <Title level={4} className="m-0 font-bold">Dr. {currentUser.name}</Title>
+                            <Space split={<Divider type="vertical" />} className="text-xs text-slate-400">
+                              <span>License: {currentUser.medical_license || 'Pending'}</span>
+                              <span>Specialization: {currentUser.specialization || 'General Practitioner'}</span>
+                              <span>Clinic: {currentUser.clinic_name || 'Not assigned'}</span>
+                            </Space>
+                          </div>
                         </Space>
-                      </div>
-                    </Space>
-                  </Col>
-                  <Col>
-                    <Space>
-                      <Tag color="success" icon={<CheckCircleOutlined />} className="px-3 py-1 rounded-full border-0 font-semibold flex items-center gap-1">
-                        Active Session
-                      </Tag>
-                      <Tag color="blue" className="px-3 py-1 rounded-full border-0 font-semibold uppercase">
-                        {latestRecord ? `${latestRecord.mode} Monitoring` : 'No Active Monitoring'}
-                      </Tag>
-                    </Space>
-                  </Col>
-                </Row>
-              </Card>
-
-              {/* View Toggle */}
-              <div className="mb-4">
-                <Tabs 
-                  activeKey={activePatientView} 
-                  onChange={(k) => setActivePatientView(k as 'clinical' | 'chat')}
-                  className="mb-0"
-                >
-                  <Tabs.TabPane tab="Clinical Diagnostics" key="clinical" />
-                  <Tabs.TabPane tab="Patient Chat" key="chat" />
-                </Tabs>
+                      </Col>
+                      <Col>
+                        <Space>
+                          <Tag color="success" icon={<CheckCircleOutlined />} className="px-3 py-1 rounded-full border-0 font-semibold">
+                            Available for Consult
+                          </Tag>
+                          <Tag color="blue" className="px-3 py-1 rounded-full border-0 font-semibold uppercase">
+                            Pro Mode
+                          </Tag>
+                        </Space>
+                      </Col>
+                    </Row>
+                  </Card>
+                </div>
               </div>
 
-              {activePatientView === 'clinical' ? (
-                <>
-                  <Row gutter={[24, 24]}>
-                  {/* Left Column - Live Video & AI Detections */}
-                  <Col xs={24} lg={15} className="space-y-6">
+              <Content className="px-6 pb-6 pt-4 overflow-y-auto relative flex-1">
+                <div className="space-y-6 max-w-7xl mx-auto w-full">
                   
-                  {/* Live Camera Feed Card */}
-                  <Card 
-                    title={
-                      <Space>
-                        <VideoCameraOutlined className="text-blue-600" />
-                        <span className="font-bold">Live Camera Feed</span>
-                      </Space>
-                    }
-                    className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
-                    extra={
-                      <Button type="primary" icon={<VideoCameraOutlined />} className="bg-slate-950 hover:bg-slate-900 border-0 rounded-lg text-xs font-semibold h-8">
-                        Start Recording
-                      </Button>
-                    }
-                  >
-                    <Paragraph className="text-slate-400 text-xs -mt-2 mb-4">
-                      Real-time gesture and movement tracking
-                    </Paragraph>
-
-                    <div className="relative aspect-video w-full rounded-2xl overflow-hidden bg-[#0f172a] border border-slate-800 flex items-center justify-center">
-                      {latestRecord && latestRecord.video_path ? (
-                        <video 
-                          src={`http://localhost:8000/${latestRecord.video_path}`}
-                          controls
-                          className="w-full h-full object-cover"
-                          poster="/uploads/video_poster.jpg"
-                        />
-                      ) : (
-                        <div className="text-center space-y-3">
-                          <div className="text-5xl animate-pulse text-blue-500/20">
-                            <LineChartOutlined />
+                  {/* Selected Patient Profile Bar */}
+                  <Card className={`sticky top-0 z-50 border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}>
+                    <Row justify="space-between" align="middle" gutter={[16, 16]}>
+                      <Col>
+                        <Space size="middle">
+                          <Avatar size={48} className="bg-blue-100 text-blue-600 font-bold text-lg">
+                            {getInitials(selectedPatient.name)}
+                          </Avatar>
+                          <div>
+                            <Title level={4} className="m-0 font-bold">{selectedPatient.name}</Title>
+                            <Space split={<Divider type="vertical" />} className="text-xs text-slate-400">
+                              <span>Patient ID: #P-2026-{String(selectedPatient.id).padStart(4, '0')}</span>
+                              <span>Age: {selectedPatient.age}</span>
+                              <span>Gender: {selectedPatient.gender}</span>
+                            </Space>
                           </div>
-                          <div className="text-xs text-slate-500 font-semibold tracking-wider uppercase">Camera Feed Placeholder</div>
-                        </div>
-                      )}
-                      
-                      {/* Overlay Info bar */}
-                      <div className="absolute bottom-4 left-4 right-4 flex justify-between text-[10px] text-slate-400 bg-slate-950/70 px-3 py-1.5 rounded-lg backdrop-blur-sm">
-                        <span className="flex items-center gap-1">
-                          <HistoryOutlined /> 00:05:32
-                        </span>
-                        <span>30 FPS • 1920x1080</span>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-4 mt-4">
-                      <Button className="flex-1 text-xs font-semibold rounded-lg">Snapshot</Button>
-                      <Button className="flex-1 text-xs font-semibold rounded-lg">Camera Settings</Button>
-                    </div>
+                        </Space>
+                      </Col>
+                      <Col>
+                        <Space>
+                          <Tag color="success" icon={<CheckCircleOutlined />} className="px-3 py-1 rounded-full border-0 font-semibold flex items-center gap-1">
+                            Active Session
+                          </Tag>
+                          <Tag color="blue" className="px-3 py-1 rounded-full border-0 font-semibold uppercase">
+                            {latestRecord ? `${latestRecord.mode} Monitoring` : 'No Active Monitoring'}
+                          </Tag>
+                        </Space>
+                      </Col>
+                    </Row>
                   </Card>
 
-                  {/* AI Detection Results Card */}
-                  <Card 
-                    title={
-                      <Space>
-                        <EyeOutlined className="text-blue-600" />
-                        <span className="font-bold">AI Detection Results</span>
-                      </Space>
-                    }
-                    className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
-                  >
-                    <Paragraph className="text-slate-400 text-xs -mt-2 mb-4">
-                      Real-time health condition analysis
-                    </Paragraph>
+                  {/* View Toggle */}
+                  <div className="mb-4">
+                    <Tabs 
+                      activeKey={activePatientView} 
+                      onChange={(k) => setActivePatientView(k as 'clinical' | 'chat')}
+                      className="mb-0"
+                    >
+                      <Tabs.TabPane tab="Clinical Diagnostics" key="clinical" />
+                      <Tabs.TabPane tab="Patient Chat" key="chat" />
+                    </Tabs>
+                  </div>
 
-                    <Tabs activeKey={activeTab} onChange={setActiveTab} className="border-b-0">
-                      <Tabs.TabPane tab="Current Session" key="current">
-                        <div className="space-y-4 pt-2">
-                          {patientHistory.length > 0 ? (
-                            patientHistory.slice(0, 3).map((record) => {
-                              // Map mode to title
-                              let title = "Movement Issue";
-                              let severity = "Mild";
-                              let color = "blue";
-                              let val = record.metric_1.value;
+                  {activePatientView === 'clinical' ? (
+                    <>
+                      <Row gutter={[24, 24]}>
+                      {/* Left Column - Live Video & AI Detections */}
+                      <Col xs={24} lg={15} className="space-y-6">
+                      
+                      {/* Live Camera Feed Card */}
+                      <Card 
+                        title={
+                          <Space>
+                            <VideoCameraOutlined className="text-blue-600" />
+                            <span className="font-bold">Live Camera Feed</span>
+                          </Space>
+                        }
+                        className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
+                        extra={
+                          <Button type="primary" icon={<VideoCameraOutlined />} className="bg-slate-950 hover:bg-slate-900 border-0 rounded-lg text-xs font-semibold h-8">
+                            Start Recording
+                          </Button>
+                        }
+                      >
+                        <Paragraph className="text-slate-400 text-xs -mt-2 mb-4">
+                          Real-time gesture and movement tracking
+                        </Paragraph>
 
-                              if (record.mode === 'tremor') {
-                                title = "Tremor Detected";
-                                severity = record.status.toLowerCase().includes('moderate') ? "Moderate" : record.status.toLowerCase().includes('severe') ? "High" : "Mild";
-                                color = severity === "High" ? "red" : severity === "Moderate" ? "amber" : "blue";
-                              } else if (record.mode === 'posture') {
-                                title = "Gait Abnormality";
-                                severity = record.status.toLowerCase().includes('moderate') ? "Moderate" : record.status.toLowerCase().includes('severe') ? "High" : "Mild";
-                                color = severity === "High" ? "red" : severity === "Moderate" ? "amber" : "blue";
-                              } else if (record.mode === 'exercise') {
-                                title = "Balance Issue";
-                                severity = record.status.toLowerCase().includes('moderate') ? "Moderate" : record.status.toLowerCase().includes('severe') ? "High" : "Mild";
-                                color = severity === "High" ? "red" : severity === "Moderate" ? "amber" : "blue";
-                              }
-
-                              const confidence = Math.round(val * 100);
-
-                              return (
-                                <div key={record.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                                  <div className="flex justify-between items-center mb-2">
-                                    <Space>
-                                      <span className="font-bold text-sm text-slate-800">{title}</span>
-                                      <Tag color={color} className="text-[10px] rounded-full border-0 px-2.5 font-semibold">{severity}</Tag>
-                                    </Space>
-                                    <div className="text-right">
-                                      <Text className="text-[10px] text-slate-400 block">Confidence</Text>
-                                      <span className="font-extrabold text-slate-800 text-lg">{confidence}%</span>
-                                    </div>
-                                  </div>
-                                  <Progress percent={confidence} showInfo={false} strokeColor="#000" trailColor="#e2e8f0" strokeWidth={6} className="m-0" />
-                                  <Text className="text-[10px] text-slate-400 mt-2 block">
-                                    Detected {new Date(record.timestamp * 1000).toLocaleTimeString()}
-                                  </Text>
-                                </div>
-                              );
-                            })
+                        <div className="relative aspect-video w-full rounded-2xl overflow-hidden bg-[#0f172a] border border-slate-800 flex items-center justify-center">
+                          {latestRecord && latestRecord.video_path ? (
+                            <video 
+                              src={`http://localhost:8000/${latestRecord.video_path}`}
+                              controls
+                              className="w-full h-full object-cover"
+                              poster="/uploads/video_poster.jpg"
+                            />
                           ) : (
-                            <Empty description="No screening records found." />
+                            <div className="text-center space-y-3">
+                              <div className="text-5xl animate-pulse text-blue-500/20">
+                                <LineChartOutlined />
+                              </div>
+                              <div className="text-xs text-slate-500 font-semibold tracking-wider uppercase">Camera Feed Placeholder</div>
+                            </div>
+                          )}
+                          
+                          {/* Overlay Info bar */}
+                          <div className="absolute bottom-4 left-4 right-4 flex justify-between text-[10px] text-slate-400 bg-slate-950/70 px-3 py-1.5 rounded-lg backdrop-blur-sm">
+                            <span className="flex items-center gap-1">
+                              <HistoryOutlined /> 00:05:32
+                            </span>
+                            <span>30 FPS • 1920x1080</span>
+                          </div>
+                        </div>
+
+                        <div className="flex gap-4 mt-4">
+                          <Button className="flex-1 text-xs font-semibold rounded-lg">Snapshot</Button>
+                          <Button className="flex-1 text-xs font-semibold rounded-lg">Camera Settings</Button>
+                        </div>
+                      </Card>
+
+                      {/* AI Detection Results Card */}
+                      <Card 
+                        title={
+                          <Space>
+                            <EyeOutlined className="text-blue-600" />
+                            <span className="font-bold">AI Detection Results</span>
+                          </Space>
+                        }
+                        className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
+                      >
+                        <Paragraph className="text-slate-400 text-xs -mt-2 mb-4">
+                          Real-time health condition analysis
+                        </Paragraph>
+
+                        <Tabs activeKey={activeTab} onChange={setActiveTab} className="border-b-0">
+                          <Tabs.TabPane tab="Current Session" key="current">
+                            <div className="space-y-4 pt-2">
+                              {patientHistory.length > 0 ? (
+                                patientHistory.slice(0, 3).map((record) => {
+                                  // Map mode to title
+                                  let title = "Movement Issue";
+                                  let severity = "Mild";
+                                  let color = "blue";
+                                  let val = record.metric_1.value;
+
+                                  if (record.mode === 'tremor') {
+                                    title = "Tremor Detected";
+                                    severity = record.status.toLowerCase().includes('moderate') ? "Moderate" : record.status.toLowerCase().includes('severe') ? "High" : "Mild";
+                                    color = severity === "High" ? "red" : severity === "Moderate" ? "amber" : "blue";
+                                  } else if (record.mode === 'posture') {
+                                    title = "Gait Abnormality";
+                                    severity = record.status.toLowerCase().includes('moderate') ? "Moderate" : record.status.toLowerCase().includes('severe') ? "High" : "Mild";
+                                    color = severity === "High" ? "red" : severity === "Moderate" ? "amber" : "blue";
+                                  } else if (record.mode === 'exercise') {
+                                    title = "Balance Issue";
+                                    severity = record.status.toLowerCase().includes('moderate') ? "Moderate" : record.status.toLowerCase().includes('severe') ? "High" : "Mild";
+                                    color = severity === "High" ? "red" : severity === "Moderate" ? "amber" : "blue";
+                                  }
+
+                                  const confidence = Math.round(val * 100);
+
+                                  return (
+                                    <div key={record.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                                      <div className="flex justify-between items-center mb-2">
+                                        <Space>
+                                          <span className="font-bold text-sm text-slate-800">{title}</span>
+                                          <Tag color={color} className="text-[10px] rounded-full border-0 px-2.5 font-semibold">{severity}</Tag>
+                                        </Space>
+                                        <div className="text-right">
+                                          <Text className="text-[10px] text-slate-400 block">Confidence</Text>
+                                          <span className="font-extrabold text-slate-800 text-lg">{confidence}%</span>
+                                        </div>
+                                      </div>
+                                      <Progress percent={confidence} showInfo={false} strokeColor="#000" trailColor="#e2e8f0" strokeWidth={6} className="m-0" />
+                                      <Text className="text-[10px] text-slate-400 mt-2 block">
+                                        Detected {new Date(record.timestamp * 1000).toLocaleTimeString()}
+                                      </Text>
+                                    </div>
+                                  );
+                                })
+                              ) : (
+                                <Empty description="No screening records found." />
+                              )}
+                            </div>
+                          </Tabs.TabPane>
+                          <Tabs.TabPane tab="Trend Analysis" key="trend">
+                            <div className="p-8 text-center text-slate-400 text-xs">
+                              Detailed trend analysis chart of patient kinesiology metrics will be rendered here.
+                            </div>
+                          </Tabs.TabPane>
+                        </Tabs>
+                      </Card>
+
+                    </Col>
+
+                    {/* Right Column - Vital Metrics & History */}
+                    <Col xs={24} lg={9} className="space-y-6">
+                      
+                      {/* Vital Metrics Card */}
+                      <Card 
+                        title={
+                          <Space>
+                            <HeartOutlined className="text-blue-600" />
+                            <span className="font-bold">Vital Metrics</span>
+                          </Space>
+                        }
+                        className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
+                      >
+                        <div className="space-y-5">
+                          {latestRecord ? (
+                            <>
+                              <div>
+                                <div className="flex justify-between text-xs mb-1.5">
+                                  <span className="text-slate-500 font-semibold">Movement Score</span>
+                                  <span className="font-bold text-slate-800">{(latestRecord.metric_1.value * 100).toFixed(0)}/100</span>
+                                </div>
+                                <Progress percent={Math.round(latestRecord.metric_1.value * 100)} showInfo={false} strokeColor="#000" strokeWidth={6} />
+                              </div>
+
+                              <div>
+                                <div className="flex justify-between text-xs mb-1.5">
+                                  <span className="text-slate-500 font-semibold">Stability Index</span>
+                                  <span className="font-bold text-slate-800">{(latestRecord.metric_2.value * 10).toFixed(1)}/10</span>
+                                </div>
+                                <Progress percent={Math.round(latestRecord.metric_2.value * 100)} showInfo={false} strokeColor="#000" strokeWidth={6} />
+                              </div>
+                            </>
+                          ) : (
+                            <div className="text-center py-4 text-slate-400 text-xs">No metrics recorded</div>
+                          )}
+
+                          <Divider className="my-3" />
+
+                          <div className="space-y-2.5 text-xs">
+                            <div className="flex justify-between">
+                              <span className="text-slate-400">Session Duration</span>
+                              <span className="font-semibold text-slate-800">00:05:32</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-400">Frames Analyzed</span>
+                              <span className="font-semibold text-slate-800">9,960</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-400">Gestures Detected</span>
+                              <span className="font-semibold text-slate-800">247</span>
+                            </div>
+                          </div>
+                        </div>
+                      </Card>
+
+                      {/* Recent Sessions Card */}
+                      <Card 
+                        title={
+                          <Space>
+                            <HistoryOutlined className="text-blue-600" />
+                            <span className="font-bold">Recent Sessions</span>
+                          </Space>
+                        }
+                        className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
+                      >
+                        <div className="space-y-3">
+                          {patientHistory.slice(0, 3).map((record) => (
+                            <div key={record.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
+                              <div className="flex justify-between items-center">
+                                <span className="font-bold text-xs text-slate-800">
+                                  {new Date(record.timestamp * 1000).toLocaleDateString()} {new Date(record.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                </span>
+                                <Tag color="blue" className="text-[9px] rounded-full border-0 px-2 font-semibold uppercase">{record.mode}</Tag>
+                              </div>
+                              <div className="flex justify-between text-[10px] text-slate-400">
+                                <span>Duration: 12 min</span>
+                                <span>{record.status}</span>
+                              </div>
+                            </div>
+                          ))}
+
+                          {patientHistory.length > 3 && (
+                            <Button type="text" block className="text-xs text-blue-600 font-bold mt-2">
+                              View All Sessions
+                            </Button>
                           )}
                         </div>
-                      </Tabs.TabPane>
-                      <Tabs.TabPane tab="Trend Analysis" key="trend">
-                        <div className="p-8 text-center text-slate-400 text-xs">
-                          Detailed trend analysis chart of patient kinesiology metrics will be rendered here.
-                        </div>
-                      </Tabs.TabPane>
-                    </Tabs>
-                  </Card>
+                      </Card>
 
-                </Col>
+                    </Col>
 
-                {/* Right Column - Vital Metrics & History */}
-                <Col xs={24} lg={9} className="space-y-6">
-                  
-                  {/* Vital Metrics Card */}
-                  <Card 
-                    title={
-                      <Space>
-                        <HeartOutlined className="text-blue-600" />
-                        <span className="font-bold">Vital Metrics</span>
-                      </Space>
-                    }
-                    className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
-                  >
-                    <div className="space-y-5">
-                      {latestRecord ? (
-                        <>
-                          <div>
-                            <div className="flex justify-between text-xs mb-1.5">
-                              <span className="text-slate-500 font-semibold">Movement Score</span>
-                              <span className="font-bold text-slate-800">{(latestRecord.metric_1.value * 100).toFixed(0)}/100</span>
-                            </div>
-                            <Progress percent={Math.round(latestRecord.metric_1.value * 100)} showInfo={false} strokeColor="#000" strokeWidth={6} />
-                          </div>
+                  </Row>
 
-                          <div>
-                            <div className="flex justify-between text-xs mb-1.5">
-                              <span className="text-slate-500 font-semibold">Stability Index</span>
-                              <span className="font-bold text-slate-800">{(latestRecord.metric_2.value * 10).toFixed(1)}/10</span>
-                            </div>
-                            <Progress percent={Math.round(latestRecord.metric_2.value * 100)} showInfo={false} strokeColor="#000" strokeWidth={6} />
-                          </div>
-                        </>
-                      ) : (
-                        <div className="text-center py-4 text-slate-400 text-xs">No metrics recorded</div>
-                      )}
-
-                      <Divider className="my-3" />
-
-                      <div className="space-y-2.5 text-xs">
-                        <div className="flex justify-between">
-                          <span className="text-slate-400">Session Duration</span>
-                          <span className="font-semibold text-slate-800">00:05:32</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-slate-400">Frames Analyzed</span>
-                          <span className="font-semibold text-slate-800">9,960</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-slate-400">Gestures Detected</span>
-                          <span className="font-semibold text-slate-800">247</span>
-                        </div>
-                      </div>
-                    </div>
-                  </Card>
-
-                  {/* Recent Sessions Card */}
-                  <Card 
-                    title={
-                      <Space>
-                        <HistoryOutlined className="text-blue-600" />
-                        <span className="font-bold">Recent Sessions</span>
-                      </Space>
-                    }
-                    className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
-                  >
-                    <div className="space-y-3">
-                      {patientHistory.slice(0, 3).map((record) => (
-                        <div key={record.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
-                          <div className="flex justify-between items-center">
-                            <span className="font-bold text-xs text-slate-800">
-                              {new Date(record.timestamp * 1000).toLocaleDateString()} {new Date(record.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                            </span>
-                            <Tag color="blue" className="text-[9px] rounded-full border-0 px-2 font-semibold uppercase">{record.mode}</Tag>
-                          </div>
-                          <div className="flex justify-between text-[10px] text-slate-400">
-                            <span>Duration: 12 min</span>
-                            <span>{record.status}</span>
-                          </div>
-                        </div>
-                      ))}
-
-                      {patientHistory.length > 3 && (
-                        <Button type="text" block className="text-xs text-blue-600 font-bold mt-2">
-                          View All Sessions
-                        </Button>
-                      )}
-                    </div>
-                  </Card>
-
-                </Col>
-
-              </Row>
-
-              {/* Bottom Action Bar */}
-              <div className={`p-4 rounded-2xl border border-slate-100 flex flex-wrap justify-between items-center gap-4 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}>
-                <Space>
-                  <Button 
-                    type="primary" 
-                    icon={<FilePdfOutlined />} 
-                    disabled={patientHistory.length === 0}
-                    onClick={handleExportPDF}
-                    className="bg-slate-950 hover:bg-slate-900 border-0 rounded-xl font-semibold text-xs px-6 py-4 flex items-center h-auto"
-                  >
-                    Generate Report
-                  </Button>
-                  <Button icon={<LineChartOutlined />} className="rounded-xl text-xs font-semibold py-4 flex items-center h-auto">
-                    View Analytics
-                  </Button>
-                  <Button icon={<ShareAltOutlined />} className="rounded-xl text-xs font-semibold py-4 flex items-center h-auto">
-                    Share with Team
-                  </Button>
-                </Space>
-                <Button type="text" icon={<SettingOutlined className="text-slate-400 text-lg" />} />
-              </div>
+                  {/* Bottom Action Bar */}
+                  <div className={`p-4 rounded-2xl border border-slate-100 flex flex-wrap justify-between items-center gap-4 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}>
+                    <Space>
+                      <Button 
+                        type="primary" 
+                        icon={<FilePdfOutlined />} 
+                        disabled={patientHistory.length === 0}
+                        onClick={handleExportPDF}
+                        className="bg-slate-950 hover:bg-slate-900 border-0 rounded-xl font-semibold text-xs px-6 py-4 flex items-center h-auto"
+                      >
+                        Generate Report
+                      </Button>
+                      <Button icon={<LineChartOutlined />} className="rounded-xl text-xs font-semibold py-4 flex items-center h-auto">
+                        View Analytics
+                      </Button>
+                      <Button icon={<ShareAltOutlined />} className="rounded-xl text-xs font-semibold py-4 flex items-center h-auto">
+                        Share with Team
+                      </Button>
+                    </Space>
+                    <Button type="text" icon={<SettingOutlined className="text-slate-400 text-lg" />} />
+                  </div>
+                </>
+              ) : (
+                <DoctorPatientChat currentUser={currentUser} selectedPatient={selectedPatient} isDarkMode={isDarkMode} />
+              )}
+                </div>
+              </Content>
             </>
           ) : (
-            <DoctorPatientChat currentUser={currentUser} selectedPatient={selectedPatient} isDarkMode={isDarkMode} />
-          )}
-
-            </div>
-          ) : (
-            <Card className={`border border-slate-100 shadow-sm rounded-2xl h-[calc(100vh-140px)] flex items-center justify-center ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}>
-              <Empty 
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
+            <Content className="p-6 flex items-center justify-center flex-1">
+              <Empty
+                image={<LineChartOutlined style={{ fontSize: 64, color: isDarkMode ? '#334155' : '#cbd5e1' }} />}
                 description={
-                  <div className="text-center">
-                    <Title level={4} className="m-0 text-slate-400">No Patient Selected</Title>
-                    <Paragraph className="text-xs text-slate-500 mt-2 max-w-md">
-                      Select a patient from the active directory on the left to review their clinical diagnostic profiles, kinematic metrics, and screening history logs.
-                    </Paragraph>
-                  </div>
+                  <span className={`text-lg font-semibold ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                    Select a patient from the list to view details
+                  </span>
                 }
               />
-            </Card>
+            </Content>
           )}
-        </Content>
+        </div>
       </Layout>
       <Modal
         title="Doctor Profile & Timetable"

@@ -128,6 +128,7 @@ export interface SkeletalFeedProps {
   isDarkMode: boolean;
   calibrationMode?: 'full' | 'half';
   onCalibrationStatusChange?: (isOk: boolean, detail?: 'ok' | 'not_detected' | 'too_far' | 'too_close' | 'moving' | 'outside' | 'loading') => void;
+  sessionId?: string;
 }
 
 export interface InstructionGuideProps {

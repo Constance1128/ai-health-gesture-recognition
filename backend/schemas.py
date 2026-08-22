@@ -13,19 +13,20 @@ class UserLogin(BaseModel):
     email: str
     password: str
 
-class FrameRequest(BaseModel):
-    session_id: str
-    mode: str  # "posture", "tremor", "exercise"
-    image_base64: str
-    user_email: Optional[str] = None
-    save_result: Optional[bool] = False  # Only True during SCREENING phase
-
 class JointPoint(BaseModel):
     name: str
     x: float
     y: float
     z: Optional[float] = None
     visibility: Optional[float] = None
+
+class FrameRequest(BaseModel):
+    session_id: str
+    mode: str  # "posture", "tremor", "exercise"
+    image_base64: Optional[str] = None
+    landmarks: Optional[List[JointPoint]] = None
+    user_email: Optional[str] = None
+    save_result: Optional[bool] = False  # Only True during SCREENING phase
 
 class AnalysisResponse(BaseModel):
     mode: str

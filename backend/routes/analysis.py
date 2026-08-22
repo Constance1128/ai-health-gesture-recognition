@@ -32,7 +32,14 @@ def analyze_frame(request: FrameRequest):
     runs the Swin Transformer & BiLSTM models, and saves results in SQLite.
     """
     # 1. Process frame and get landmarks and angles
-    tracker_result = tracker.get_landmarks_or_fallback(request.image_base64, request.mode)
+    if request.landmarks:
+        # Fast path: MediaPipe already ran on the client JS, zero image processing overhead!
+        landmarks_dict_list = [lm.dict() for lm in request.landmarks]
+        tracker_result = tracker.process_client_landmarks(landmarks_dict_list)
+    else:
+        # Slow path: Fallback to running OpenCV and MediaPipe Python using Base64 strings
+        tracker_result = tracker.get_landmarks_or_fallback(request.image_base64, request.mode)
+        
     landmarks = tracker_result.get("landmarks", [])
 
     # 2. Add to Session History
@@ -239,8 +246,8 @@ async def upload_video(
 
 @router.get("/history")
 def get_history(email: Optional[str] = None):
-    """Retrieves the last 50 health analysis records from the database, optionally filtered by user email."""
+    """Retrieves the last 5000 health analysis records from the database, optionally filtered by user email."""
     try:
-        return get_history_records(limit=50, email=email)
+        return get_history_records(limit=5000, email=email)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database fetch error: {str(e)}")

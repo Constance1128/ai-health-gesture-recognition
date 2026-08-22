@@ -2,14 +2,21 @@ import { JointPoint } from '../types';
 
 // MediaPipe Pose connection pairs (indices 0 to 32)
 export const POSE_CONNECTIONS = [
+  // Face
+  [0, 1], [1, 2], [2, 3], [3, 7], // Left Eye/Ear
+  [0, 4], [4, 5], [5, 6], [6, 8], // Right Eye/Ear
+  [9, 10], // Mouth
+  // Torso
   [11, 12], // Shoulders
-  [11, 13], [13, 15], // Left Arm
-  [12, 14], [14, 16], // Right Arm
   [11, 23], [12, 24], [23, 24], // Torso & Hips
-  [23, 25], [25, 27], // Left Leg
-  [24, 26], [26, 28], // Right Leg
-  [27, 29], [29, 31], [27, 31], // Left Foot
-  [28, 30], [30, 32], [28, 32]  // Right Foot
+  // Left Arm & Hand
+  [11, 13], [13, 15], [15, 17], [15, 19], [15, 21], [17, 19],
+  // Right Arm & Hand
+  [12, 14], [14, 16], [16, 18], [16, 20], [16, 22], [18, 20],
+  // Left Leg & Foot
+  [23, 25], [25, 27], [27, 29], [29, 31], [27, 31],
+  // Right Leg & Foot
+  [24, 26], [26, 28], [28, 30], [30, 32], [28, 32]
 ];
 
 /**
@@ -404,3 +411,106 @@ export const drawPoseAngles = (
   }
 };
 
+export const drawHands = (
+  ctx: CanvasRenderingContext2D,
+  handLandmarks: any[][],
+  canvasWidth: number,
+  canvasHeight: number
+) => {
+  if (!handLandmarks || handLandmarks.length === 0) return;
+
+  handLandmarks.forEach(hand => {
+    if (!hand || hand.length < 21) return;
+    
+    const wrist = hand[0];
+    const fingerTips = [4, 8, 12, 16, 20]; // Thumb, Index, Middle, Ring, Pinky tips
+
+    // 1. Draw fan-style lines radiating from wrist to fingertips
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#10b981'; // Vibrant green
+    ctx.shadowBlur = 4;
+    ctx.shadowColor = '#10b981';
+
+    fingerTips.forEach(tipIdx => {
+      const tip = hand[tipIdx];
+      if (wrist && tip) {
+        ctx.beginPath();
+        ctx.moveTo(wrist.x * canvasWidth, wrist.y * canvasHeight);
+        ctx.lineTo(tip.x * canvasWidth, tip.y * canvasHeight);
+        ctx.stroke();
+      }
+    });
+
+    // 2. Link actual knuckles together (bone structure)
+    const HAND_CONNECTIONS = [
+      [0, 1], [1, 2], [2, 3], [3, 4], // Thumb
+      [0, 5], [5, 6], [6, 7], [7, 8], // Index
+      [5, 9], [9, 10], [10, 11], [11, 12], // Middle
+      [9, 13], [13, 14], [14, 15], [15, 16], // Ring
+      [13, 17], [17, 18], [18, 19], [19, 20], // Pinky
+      [0, 17] // Palm base
+    ];
+    
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = '#10b981';
+    
+    HAND_CONNECTIONS.forEach(([i, j]) => {
+      const p1 = hand[i];
+      const p2 = hand[j];
+      if (p1 && p2) {
+        ctx.beginPath();
+        ctx.moveTo(p1.x * canvasWidth, p1.y * canvasHeight);
+        ctx.lineTo(p2.x * canvasWidth, p2.y * canvasHeight);
+        ctx.stroke();
+      }
+    });
+
+    // 3. Draw dots at all 21 joints
+    ctx.shadowBlur = 0;
+    hand.forEach(joint => {
+      ctx.beginPath();
+      ctx.arc(joint.x * canvasWidth, joint.y * canvasHeight, 3, 0, 2 * Math.PI);
+      ctx.fillStyle = '#3b82f6';
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    });
+  });
+};
+
+export const drawFace = (
+  ctx: CanvasRenderingContext2D,
+  faceLandmarks: any[][],
+  canvasWidth: number,
+  canvasHeight: number
+) => {
+  if (!faceLandmarks || faceLandmarks.length === 0) return;
+
+  faceLandmarks.forEach(face => {
+    if (!face || face.length < 478) return;
+
+    // Filter style facial dots (nose tip, nose bridge, under eyes, eyebrows)
+    const beautyPoints = [
+      1, 4, 19, // Nose ridge
+      33, 133, 159, 145, // Left eye rim
+      362, 263, 386, 374, // Right eye rim
+      70, 63, 105, 66, 107, // Left eyebrow
+      336, 296, 334, 293, 300 // Right eyebrow
+    ];
+
+    ctx.fillStyle = '#10b981'; // Neon green dots
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = '#10b981';
+
+    beautyPoints.forEach(idx => {
+      const pt = face[idx];
+      if (pt) {
+        ctx.beginPath();
+        ctx.arc(pt.x * canvasWidth, pt.y * canvasHeight, 2, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+    });
+    ctx.shadowBlur = 0;
+  });
+};

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { message } from 'antd';
 import { User, DBHistoryRecord, AnalysisResult, ScreenState } from '../types';
 import * as analysisApi from '../api/analysis.api';
@@ -9,7 +9,18 @@ export function useAssessmentData(
   setScreenState: (state: ScreenState) => void
 ) {
   const [backendConnected, setBackendConnected] = useState<boolean>(false);
-  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [analysisResult, setAnalysisResultState] = useState<AnalysisResult | null>(() => {
+    const saved = sessionStorage.getItem('dashboard_analysisResult');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) {}
+    }
+    return null;
+  });
+  const setAnalysisResult = useCallback((result: AnalysisResult | null) => {
+    if (result) sessionStorage.setItem('dashboard_analysisResult', JSON.stringify(result));
+    else sessionStorage.removeItem('dashboard_analysisResult');
+    setAnalysisResultState(result);
+  }, []);
   const [dbHistory, setDbHistory] = useState<DBHistoryRecord[]>([]);
   const [uploading, setUploading] = useState<boolean>(false);
 

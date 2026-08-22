@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Card, Space, Switch, Spin, Tag, message } from 'antd';
 import { VideoCameraOutlined, SyncOutlined } from '@ant-design/icons';
 import { User, JointPoint, AnalysisResult, ScreenState, SkeletalFeedProps } from '../types';
-import { drawSkeleton, getJointsVariance, getFilteredConnections, drawPoseAngles } from '../utils/kinesiology';
+import { drawSkeleton, getJointsVariance, getFilteredConnections, drawPoseAngles, drawHands, drawFace } from '../utils/kinesiology';
 import { PostureSnapshot, buildSnapshot } from '../utils/postureDiagnosis';
 import * as analysisApi from '../api/analysis.api';
 
@@ -24,6 +24,7 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
   calibrationMode = 'full',
   onCalibrationStatusChange,
   onSnapshotsCollected,
+  sessionId,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -33,6 +34,8 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
   const calibrationDetailRef = useRef<string>('ok');
   const analysisResultRef = useRef<AnalysisResult | null>(null);
   const humanRef = useRef<any>(null);
+  const handRef = useRef<any>(null);
+  const faceRef = useRef<any>(null);
   const angleSnapshotsRef = useRef<PostureSnapshot[]>([]);
   const screenStateRef = useRef<ScreenState>(screenState);
   const [humanLoading, setHumanLoading] = useState(true);
@@ -45,8 +48,11 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
       angleSnapshotsRef.current = [];
     }
     // When FINISHED, pass collected snapshots up
-    if (screenState === 'FINISHED' && onSnapshotsCollected) {
+    // When FINISHED, pass collected snapshots up, but ONLY if we actually collected them
+    if (screenState === 'FINISHED' && onSnapshotsCollected && angleSnapshotsRef.current.length > 0) {
       onSnapshotsCollected(angleSnapshotsRef.current);
+      // Clear them so we don't accidentally send them again if the component remounts
+      angleSnapshotsRef.current = [];
     }
   }, [screenState]);
 
@@ -56,51 +62,63 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
 
   useEffect(() => {
     let isMounted = true;
-    const initHuman = async () => {
+    const initMediaPipe = async () => {
       try {
-        const { Human } = await import('@vladmandic/human');
-        const h = new Human({
-          backend: 'webgl',
-          modelBasePath: 'https://cdn.jsdelivr.net/npm/@vladmandic/human@latest/models',
-          face: { enabled: false },
-          body: { enabled: true },
-          hand: { enabled: false },
-          object: { enabled: false },
-          segmentation: { enabled: false },
-          filter: { enabled: false }
+        const { PoseLandmarker, HandLandmarker, FaceLandmarker, FilesetResolver } = await import('@mediapipe/tasks-vision');
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+        );
+        const poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+            delegate: "GPU"
+          },
+          runningMode: "VIDEO",
+          numPoses: 1,
+          minPoseDetectionConfidence: 0.75,
+          minPosePresenceConfidence: 0.75,
+          minTrackingConfidence: 0.75,
         });
-        await h.load();
-        await h.warmup();
+
+        const handLandmarker = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+            delegate: "GPU"
+          },
+          runningMode: "VIDEO",
+          numHands: 2,
+          minHandDetectionConfidence: 0.5,
+          minHandPresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        });
+
+        const faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+            delegate: "GPU"
+          },
+          runningMode: "VIDEO",
+          numFaces: 1,
+          minFaceDetectionConfidence: 0.5,
+          minFacePresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        });
+
         if (isMounted) {
-          humanRef.current = h;
+          humanRef.current = poseLandmarker;
+          handRef.current = handLandmarker;
+          faceRef.current = faceLandmarker;
           setHumanLoading(false);
         }
       } catch (err) {
         console.error("Failed to load local pose tracker:", err);
       }
     };
-    initHuman();
+    initMediaPipe();
     return () => {
       isMounted = false;
     };
   }, []);
-
-  // MoveNet to MediaPipe index mapping defined outside components
-  const moveNetMap: { [key: number]: number } = {
-    0: 0,   // nose -> nose
-    5: 11,  // leftShoulder -> left_shoulder
-    6: 12,  // rightShoulder -> right_shoulder
-    7: 13,  // leftElbow -> left_elbow
-    8: 14,  // rightElbow -> right_elbow
-    9: 15,  // leftWrist -> left_wrist
-    10: 16, // rightWrist -> right_wrist
-    11: 23, // leftHip -> left_hip
-    12: 24, // rightHip -> right_hip
-    13: 25, // leftKnee -> left_knee
-    14: 26, // rightKnee -> right_knee
-    15: 27, // leftAnkle -> left_ankle
-    16: 28  // rightAnkle -> right_ankle
-  };
 
   const prepSecondsRef = useRef<number>(prepSeconds);
   const countdownSecondsRef = useRef<number>(countdownSeconds);
@@ -160,6 +178,8 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
   }, [cameraActive]);
 
   const localLandmarksRef = useRef<JointPoint[]>([]);
+  const localHandsRef = useRef<any[]>([]);
+  const localFaceRef = useRef<any[]>([]);
   const isLocalFallbackRef = useRef<boolean>(true);
 
   // 2. Client-Side AI Detection Loop (Asynchronous, non-blocking)
@@ -170,27 +190,35 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
       if (isCancelled) return;
 
       const video = videoRef.current;
-      if (humanRef.current && cameraActive && video && video.readyState === video.HAVE_ENOUGH_DATA) {
+      if (humanRef.current && cameraActive && video && video.readyState >= 2) {
         try {
-          const result = await humanRef.current.detect(video);
-          if (result.body && result.body.length > 0) {
+          const startTimeMs = performance.now();
+          const poseResult = humanRef.current.detectForVideo(video, startTimeMs);
+          const handResult = handRef.current ? handRef.current.detectForVideo(video, startTimeMs) : { landmarks: [] };
+          const faceResult = faceRef.current ? faceRef.current.detectForVideo(video, startTimeMs) : { faceLandmarks: [] };
+
+          if (poseResult.landmarks && poseResult.landmarks.length > 0) {
             isLocalFallbackRef.current = false;
-            const body = result.body[0];
+            const person = poseResult.landmarks[0];
+            localHandsRef.current = handResult.landmarks || [];
+            localFaceRef.current = faceResult.faceLandmarks || [];
 
-            const mapped = Array(33).fill(null);
+            const jointNames = [
+              "nose", "left_eye_inner", "left_eye", "left_eye_outer", "right_eye_inner", "right_eye", "right_eye_outer",
+              "left_ear", "right_ear", "mouth_left", "mouth_right", "left_shoulder", "right_shoulder", "left_elbow",
+              "right_elbow", "left_wrist", "right_wrist", "left_pinky", "right_pinky", "left_index", "right_index",
+              "left_thumb", "right_thumb", "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle",
+              "left_heel", "right_heel", "left_foot_index", "right_foot_index"
+            ];
 
-            body.keypoints.forEach((kp: any) => {
-              const mpIdx = moveNetMap[kp.id];
-              if (mpIdx !== undefined) {
-                mapped[mpIdx] = {
-                  name: kp.part,
-                  x: kp.positionRaw[0],
-                  y: kp.positionRaw[1],
-                  z: kp.positionRaw[2] || 0,
-                  visibility: kp.score
-                };
-              }
-            });
+            const mapped = person.map((kp: any, idx: number) => ({
+              name: jointNames[idx] || `joint_${idx}`,
+              x: kp.x,
+              y: kp.y,
+              z: kp.z || 0,
+              visibility: kp.visibility || 0.9
+            }));
+
             localLandmarksRef.current = mapped;
 
             // Update landmark history and calibration status locally (Real-time 30 FPS calibration!)
@@ -201,19 +229,12 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
               // Accumulate posture snapshots during SCREENING (one every ~10 frames)
               if (screenStateRef.current === 'SCREENING') {
                 if (angleSnapshotsRef.current.length === 0 ||
-                    Date.now() - angleSnapshotsRef.current[angleSnapshotsRef.current.length - 1].timestamp > 300) {
+                  Date.now() - angleSnapshotsRef.current[angleSnapshotsRef.current.length - 1].timestamp > 300) {
                   angleSnapshotsRef.current.push(buildSnapshot(mapped));
                 }
               }
 
               if (screenState === 'PREPARATION' && onCalibrationStatusChange && landmarkHistoryRef.current.length >= 3) {
-                const activeConnections = getFilteredConnections(calibrationMode);
-                const activeIndices = Array.from(new Set(activeConnections.flat())) as number[];
-                const variance = getJointsVariance(activeIndices, landmarkHistoryRef.current);
-
-                // Bypass alignment checks for backend data too
-                let isInsideBox = true;
-                let detail: 'ok' | 'not_detected' | 'too_far' | 'too_close' | 'moving' | 'outside' = 'ok';
                 // Force instant calibration success
                 if (onCalibrationStatusChange) {
                   onCalibrationStatusChange(true, 'ok');
@@ -227,12 +248,10 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
         } catch (err) {
           console.error("Local pose detection error:", err);
         }
-      } else {
-        // Human not loaded, camera inactive, or no video data
       }
 
       // Schedule next detection immediately (async loop)
-      setTimeout(detectionLoop, 10);
+      requestAnimationFrame(detectionLoop);
     };
 
     if (cameraActive && !humanLoading) {
@@ -290,24 +309,26 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
       // Send frame to backend every 200ms for real-time landmark data
       if ((screenState === 'SCREENING' || screenState === 'PREPARATION') && cameraActive && timestamp - lastProcessingTime > 200) {
         lastProcessingTime = timestamp;
-        analysisApi.analyzeFrame({
-          mode: activeMode,
-          session_id: "patient_guided_session",
-          user_email: currentUser?.email,
-          image_base64: canvas.toDataURL('image/jpeg', 0.6),
-          save_result: screenState === 'SCREENING'
-        }).then(data => {
-          setAnalysisResult(data);
-          analysisResultRef.current = data;
-          fetchHistory(currentUser?.email);
+        if (localLandmarksRef.current.length === 33) {
+          analysisApi.analyzeFrame({
+            mode: activeMode,
+            session_id: sessionId || "patient_guided_session",
+            user_email: currentUser?.email,
+            landmarks: localLandmarksRef.current, // Send tiny JSON instead of massive Base64
+            save_result: screenState === 'SCREENING'
+          }).then(data => {
+            setAnalysisResult(data);
+            analysisResultRef.current = data;
+            fetchHistory(currentUser?.email);
 
-          // Force instant calibration success to bypass any backend/local connection bugs
-          if (screenState === 'PREPARATION' && onCalibrationStatusChange) {
-            onCalibrationStatusChange(true, 'ok');
-          }
-        }).catch(err => {
-          console.error("Backend frame processing error:", err);
-        });
+            // Force instant calibration success to bypass any backend/local connection bugs
+            if (screenState === 'PREPARATION' && onCalibrationStatusChange) {
+              onCalibrationStatusChange(true, 'ok');
+            }
+          }).catch(err => {
+            console.error("Backend frame processing error:", err);
+          });
+        }
       }
 
       if (isCancelled) return;
@@ -326,17 +347,27 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
         activeLandmarks = currentAnalysis.landmarks;
       }
 
-      if (activeLandmarks) {
-        drawSkeleton(
-          ctx,
-          activeLandmarks,
-          landmarkHistoryRef.current,
-          canvas.width,
-          canvas.height,
-          calibrationMode
-        );
-        // Always draw joint angle arcs — visible from the first frame
-        drawPoseAngles(ctx, activeLandmarks, canvas.width, canvas.height, calibrationMode);
+      if (cameraActive) {
+        if (activeLandmarks) {
+          drawSkeleton(
+            ctx,
+            activeLandmarks,
+            landmarkHistoryRef.current,
+            canvas.width,
+            canvas.height,
+            calibrationMode
+          );
+          // Always draw joint angle arcs — visible from the first frame
+          drawPoseAngles(ctx, activeLandmarks, canvas.width, canvas.height, calibrationMode);
+        }
+
+        if (localHandsRef.current && localHandsRef.current.length > 0) {
+          drawHands(ctx, localHandsRef.current, canvas.width, canvas.height);
+        }
+
+        if (localFaceRef.current && localFaceRef.current.length > 0) {
+          drawFace(ctx, localFaceRef.current, canvas.width, canvas.height);
+        }
       }
 
       animationFrameId = requestAnimationFrame(renderLoop);

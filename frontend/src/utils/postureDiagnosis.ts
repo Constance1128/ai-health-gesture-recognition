@@ -70,9 +70,13 @@ function calcAngle(p1: JointPoint, p2: JointPoint, p3: JointPoint): number {
   return angle;
 }
 
-function avg(arr: number[]): number {
+// We use the 85th percentile rather than the mean average. 
+// This prevents brief moments of good posture from mathematically "diluting" the detection of bad posture held for a few seconds.
+function getRepresentativeValue(arr: number[]): number {
   if (arr.length === 0) return 0;
-  return arr.reduce((a, b) => a + b, 0) / arr.length;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const idx = Math.floor(sorted.length * 0.85);
+  return sorted[Math.min(idx, sorted.length - 1)];
 }
 
 function clamp(val: number, min: number, max: number) {
@@ -103,19 +107,19 @@ function gradeFromScore(score: number): { grade: string; status: string } {
 export function buildSnapshot(landmarks: JointPoint[]): PostureSnapshot {
   return {
     timestamp: Date.now(),
-    nose:          landmarks[0],
-    leftShoulder:  landmarks[11],
+    nose: landmarks[0],
+    leftShoulder: landmarks[11],
     rightShoulder: landmarks[12],
-    leftElbow:     landmarks[13],
-    rightElbow:    landmarks[14],
-    leftWrist:     landmarks[15],
-    rightWrist:    landmarks[16],
-    leftHip:       landmarks[23],
-    rightHip:      landmarks[24],
-    leftKnee:      landmarks[25],
-    rightKnee:     landmarks[26],
-    leftAnkle:     landmarks[27],
-    rightAnkle:    landmarks[28],
+    leftElbow: landmarks[13],
+    rightElbow: landmarks[14],
+    leftWrist: landmarks[15],
+    rightWrist: landmarks[16],
+    leftHip: landmarks[23],
+    rightHip: landmarks[24],
+    leftKnee: landmarks[25],
+    rightKnee: landmarks[26],
+    leftAnkle: landmarks[27],
+    rightAnkle: landmarks[28],
   };
 }
 
@@ -203,20 +207,31 @@ export function generateDiagnosis(snapshots: PostureSnapshot[]): DiagnosisReport
   });
 
   // ── 2. Compute averages ──────────────────
-  const avgShoulderAsymmetry = avg(shoulderAsymmetries);
-  const avgHipTilt = avg(hipTilts);
-  const avgHeadOffset = avg(headForwardOffsets);
-  const avgSpineAngle = avg(spineAngles);
-  const avgLeftElbow = avg(leftElbowAngles);
-  const avgRightElbow = avg(rightElbowAngles);
-  const avgLeftKnee = avg(leftKneeAngles);
-  const avgRightKnee = avg(rightKneeAngles);
+  const avgShoulderAsymmetry = getRepresentativeValue(shoulderAsymmetries);
+  const avgHipTilt = getRepresentativeValue(hipTilts);
+  const avgHeadOffset = getRepresentativeValue(headForwardOffsets);
+  const avgSpineAngle = getRepresentativeValue(spineAngles);
+  const avgLeftElbow = getRepresentativeValue(leftElbowAngles);
+  const avgRightElbow = getRepresentativeValue(rightElbowAngles);
+  const avgLeftKnee = getRepresentativeValue(leftKneeAngles);
+  const avgRightKnee = getRepresentativeValue(rightKneeAngles);
+
+  console.log('[Diagnosis] Calculated Averages:', {
+    avgShoulderAsymmetry,
+    avgHipTilt,
+    avgHeadOffset,
+    avgSpineAngle,
+    avgLeftElbow,
+    avgRightElbow,
+    avgLeftKnee,
+    avgRightKnee
+  });
 
   // ── 3. Build findings ────────────────────
   const findings: PostureFinding[] = [];
 
-  // Shoulder asymmetry (threshold: mild >2%, moderate >5%, severe >8%)
-  const shoulderSev = getSeverityLabel(avgShoulderAsymmetry, 2, 5, 8);
+  // Shoulder asymmetry (threshold: mild >0.8%, moderate >2.5%, severe >5%)
+  const shoulderSev = getSeverityLabel(avgShoulderAsymmetry, 0.8, 2.5, 5);
   if (shoulderSev !== 'normal') {
     findings.push({
       id: 'shoulder-asymmetry',
@@ -227,8 +242,8 @@ export function generateDiagnosis(snapshots: PostureSnapshot[]): DiagnosisReport
     });
   }
 
-  // Hip tilt (threshold: mild >2%, moderate >4%, severe >7%)
-  const hipSev = getSeverityLabel(avgHipTilt, 2, 4, 7);
+  // Hip tilt (threshold: mild >0.8%, moderate >2.5%, severe >5%)
+  const hipSev = getSeverityLabel(avgHipTilt, 0.8, 2.5, 5);
   if (hipSev !== 'normal') {
     findings.push({
       id: 'hip-tilt',
@@ -239,8 +254,8 @@ export function generateDiagnosis(snapshots: PostureSnapshot[]): DiagnosisReport
     });
   }
 
-  // Forward head / spine lean (threshold: mild >3°, moderate >6°, severe >10°)
-  const spineSev = getSeverityLabel(avgSpineAngle, 3, 6, 10);
+  // Forward head / spine lean (threshold: mild >1.5°, moderate >3.5°, severe >6°)
+  const spineSev = getSeverityLabel(avgSpineAngle, 1.5, 3.5, 6);
   if (spineSev !== 'normal') {
     findings.push({
       id: 'spine-misalignment',
@@ -251,8 +266,8 @@ export function generateDiagnosis(snapshots: PostureSnapshot[]): DiagnosisReport
     });
   }
 
-  // Head offset (threshold: mild >3%, moderate >6%, severe >10%)
-  const headSev = getSeverityLabel(avgHeadOffset, 3, 6, 10);
+  // Head offset (threshold: mild >1.0%, moderate >3.0%, severe >6.0%)
+  const headSev = getSeverityLabel(avgHeadOffset, 1.0, 3.0, 6.0);
   if (headSev !== 'normal') {
     findings.push({
       id: 'head-position',
@@ -437,10 +452,10 @@ export function generateDiagnosis(snapshots: PostureSnapshot[]): DiagnosisReport
     });
   };
 
-  addMeasurement('Shoulder Symmetry', 'L/R height difference', avgShoulderAsymmetry, 0, 2, '%', 1, 3, 5);
-  addMeasurement('Spine Lateral Angle', 'Torso vertical alignment', avgSpineAngle, 0, 3, '°', 2, 5, 8);
-  addMeasurement('Hip Tilt', 'Pelvic lateral balance', avgHipTilt, 0, 2, '%', 1, 3, 6);
-  addMeasurement('Head Offset', 'Head lateral position', avgHeadOffset, 0, 3, '%', 2, 5, 8);
+  addMeasurement('Shoulder Symmetry', 'L/R height difference', avgShoulderAsymmetry, 0, 1, '%', 0.8, 2.5, 5);
+  addMeasurement('Spine Lateral Angle', 'Torso vertical alignment', avgSpineAngle, 0, 2, '°', 1.5, 3.5, 6);
+  addMeasurement('Hip Tilt', 'Pelvic lateral balance', avgHipTilt, 0, 1, '%', 0.8, 2.5, 5);
+  addMeasurement('Head Offset', 'Head lateral position', avgHeadOffset, 0, 1.5, '%', 1.0, 3.0, 6.0);
   if (avgLeftElbow > 0) addMeasurement('Left Elbow Angle', 'Elbow joint flexion', avgLeftElbow, 150, 180, '°', 10, 20, 35);
   if (avgRightElbow > 0) addMeasurement('Right Elbow Angle', 'Elbow joint flexion', avgRightElbow, 150, 180, '°', 10, 20, 35);
   if (avgLeftKnee > 0) addMeasurement('Left Knee Angle', 'Knee joint extension', avgLeftKnee, 160, 180, '°', 10, 20, 35);
@@ -464,13 +479,12 @@ export function generateDiagnosis(snapshots: PostureSnapshot[]): DiagnosisReport
 
   const recommendation = abnormalFindings.length === 0
     ? 'Continue your current posture habits. Regular stretching and core strengthening exercises are recommended. No immediate clinical consultation required based on this screening.'
-    : `⚠️ This is an AI estimate only — not a medical diagnosis. ${
-        highRiskConditions.length > 0
-          ? `High-risk indicators suggest possible: ${highRiskConditions.map(c => c.name).join(', ')}. Please consult an orthopaedic specialist or neurologist immediately.`
-          : conditions.length > 0
-          ? `Possible conditions detected: ${topConditions}. Consider scheduling a physiotherapy or clinical assessment.`
-          : 'Postural deviations detected. Targeted stretching and posture correction exercises are recommended.'
-      }`;
+    : `⚠️ This is an AI estimate only — not a medical diagnosis. ${highRiskConditions.length > 0
+      ? `High-risk indicators suggest possible: ${highRiskConditions.map(c => c.name).join(', ')}. Please consult an orthopaedic specialist or neurologist immediately.`
+      : conditions.length > 0
+        ? `Possible conditions detected: ${topConditions}. Consider scheduling a physiotherapy or clinical assessment.`
+        : 'Postural deviations detected. Targeted stretching and posture correction exercises are recommended.'
+    }`;
 
   return { score, grade, status, findings, conditions, measurements, summary, recommendation };
 }
