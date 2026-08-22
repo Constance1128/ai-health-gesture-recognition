@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import time
 from typing import Dict, Any, List
@@ -54,6 +55,13 @@ class SwinTransformerClassifier:
         
         self.model = Model(inputs=inputs, outputs=outputs)
         self.model.compile(optimizer='adam', loss='binary_crossentropy')
+        
+        weights_path = os.path.join(os.path.dirname(__file__), "weights", "tremor_model.weights.h5")
+        if os.path.exists(weights_path):
+            self.model.load_weights(weights_path)
+            print("   [Swin] Loaded pre-trained weights.")
+        else:
+            print("   [Swin] No saved weights found — starting fresh training.")
 
     def predict(self, sequence: np.ndarray) -> float:
         """
@@ -70,17 +78,22 @@ class SwinTransformerClassifier:
             # We compute the variance of the coordinates over time (specifically the wrist)
             # and run it through a sigmoid activation to simulate the network.
             # In a real model, this represents the attention-weighting of high-frequency noise.
-            wrist_coords = sequence[:, 4*3 : 5*3] # Wrist joint index is 4 (nose=0, l_shoulder=1, r_shoulder=2, r_elbow=3, r_wrist=4)
-            if len(wrist_coords) < 2:
+            wrist_coords = sequence[:, 4*3 : 5*3] # Wrist joint index is 4
+            if len(wrist_coords) < 3:
                 return 0.0
             
+            # Apply a simple low-pass filter (moving average) to reduce MediaPipe jitter
+            smoothed_wrist = np.copy(wrist_coords)
+            for i in range(1, len(wrist_coords) - 1):
+                smoothed_wrist[i] = (wrist_coords[i-1] + wrist_coords[i] + wrist_coords[i+1]) / 3.0
+            
             # Calculate high-frequency delta (derivative) to extract micro-oscillations
-            deltas = np.diff(wrist_coords, axis=0)
+            deltas = np.diff(smoothed_wrist, axis=0)
             variance = np.var(deltas)
             
             # Sigmoid activation function
             # Scaled so that standard breathing/movement is low, but rapid shaking results in high probability
-            probability = 1.0 / (1.0 + np.exp(-(variance * 15.0 - 2.5)))
+            probability = 1.0 / (1.0 + np.exp(-(variance * 20.0 - 3.0)))
             return float(probability)
 
 # =====================================================================
@@ -112,6 +125,13 @@ class BiLSTMGaitAnalyzer:
         
         self.model = Model(inputs=inputs, outputs=outputs)
         self.model.compile(optimizer='adam', loss='mean_squared_error')
+        
+        weights_path = os.path.join(os.path.dirname(__file__), "weights", "gait_model.weights.h5")
+        if os.path.exists(weights_path):
+            self.model.load_weights(weights_path)
+            print("   [BiLSTM] Loaded pre-trained weights.")
+        else:
+            print("   [BiLSTM] No saved weights found — starting fresh training.")
 
     def analyze_symmetry(self, sequence: np.ndarray) -> float:
         """
@@ -128,16 +148,18 @@ class BiLSTMGaitAnalyzer:
             # We compute the correlation coefficient of their movements over the sequence.
             # In a real model, the BiLSTM captures temporal phase offsets between left and right steps.
             
-            # Extract left and right arm coordinates
-            left_arm = sequence[:, 1*3 : 2*3]  # Left shoulder
-            right_arm = sequence[:, 2*3 : 3*3] # Right shoulder
+            # Extract left and right side coordinates (Shoulders and Knees)
+            left_shoulder = sequence[:, 11*3 : 12*3] # Left shoulder (idx 11)
+            right_shoulder = sequence[:, 12*3 : 13*3] # Right shoulder (idx 12)
+            left_knee = sequence[:, 25*3 : 26*3] # Left knee (idx 25)
+            right_knee = sequence[:, 26*3 : 27*3] # Right knee (idx 26)
             
-            if len(left_arm) < 5:
+            if len(left_shoulder) < 5:
                 return 1.0
                 
-            # Compute correlation over time
-            left_val = left_arm[:, 1] # Y-axis movement
-            right_val = right_arm[:, 1] # Y-axis movement
+            # Compute correlation over time by summing the vertical movement of arm and leg
+            left_val = left_shoulder[:, 1] + left_knee[:, 1] 
+            right_val = right_shoulder[:, 1] + right_knee[:, 1]
             
             # Standardize
             l_std = np.std(left_val)
@@ -216,29 +238,43 @@ class AIKinesiologyEngine:
         # Calculate overall score based on the active mode
         if mode == "posture":
             # Posture score depends on shoulder and neck angles
-            # We extract them from the latest frame
-            latest_frame_dict = landmarks_history[-1]
-            latest_frame = latest_frame_dict.get("landmarks", []) if isinstance(latest_frame_dict, dict) else latest_frame_dict
+            # We extract them from the last 5 frames to smooth out jitter
+            history_len = min(5, len(landmarks_history))
+            recent_frames = landmarks_history[-history_len:]
             
-            nose = latest_frame[0] if len(latest_frame) > 0 else {}
-            l_shoulder = latest_frame[1] if len(latest_frame) > 1 else {}
-            r_shoulder = latest_frame[2] if len(latest_frame) > 2 else {}
+            neck_angles = []
+            shoulder_diffs = []
             
-            # Simple angle approximations
-            neck_angle = abs(nose.get('y', 0.3) - l_shoulder.get('y', 0.5)) * 100
-            shoulder_diff = abs(l_shoulder.get('y', 0.5) - r_shoulder.get('y', 0.5)) * 100
+            for frame_dict in recent_frames:
+                frame = frame_dict.get("landmarks", []) if isinstance(frame_dict, dict) else frame_dict
+                nose = frame[0] if len(frame) > 0 else {}
+                l_shoulder = frame[11] if len(frame) > 11 else (frame[1] if len(frame) > 1 else {})
+                r_shoulder = frame[12] if len(frame) > 12 else (frame[2] if len(frame) > 2 else {})
+                
+                neck_angles.append(abs(nose.get('y', 0.3) - l_shoulder.get('y', 0.5)) * 100)
+                shoulder_diffs.append(abs(l_shoulder.get('y', 0.5) - r_shoulder.get('y', 0.5)) * 100)
+                
+            neck_angle = sum(neck_angles) / len(neck_angles)
+            shoulder_diff = sum(shoulder_diffs) / len(shoulder_diffs)
             
             posture_score = max(0.0, 100.0 - (neck_angle * 1.5) - (shoulder_diff * 4.0))
             
             if posture_score > 85:
-                status = "Excellent"
+                status = "Normal (Excellent)"
                 rec = "Great spinal alignment! Your posture is in the optimal range."
             elif posture_score > 70:
-                status = "Good"
+                status = "Normal (Good)"
                 rec = "Good posture. Remember to stand up and stretch every 30 minutes."
             else:
-                status = "Slouched"
-                rec = "Forward head tilt detected. Adjust your monitor height and pull your shoulders back."
+                if shoulder_diff > 12.0:
+                    status = "Potential Scoliosis Detected"
+                    rec = "Significant uneven shoulder height detected. This asymmetrical alignment is often associated with Scoliosis. Please consult a specialist."
+                elif neck_angle > 18.0:
+                    status = "Potential Kyphosis Detected"
+                    rec = "Extreme forward head tilt and rounded shoulders detected (Hunchback posture). This can lead to severe strain. Please consult a physiotherapist."
+                else:
+                    status = "Text Neck Syndrome"
+                    rec = "Consistent downward head tilt detected. Adjust your monitor height and pull your shoulders back to avoid long-term spinal strain."
                 
             return {
                 "score": round(posture_score, 1),
@@ -298,6 +334,63 @@ class AIKinesiologyEngine:
                     "accuracy": round(accuracy, 1),
                     "range_of_motion": round(60.0 + (symmetry_score * 75.0), 1),
                     "movement_flow": round(flow_score * 100.0, 1)
+                }
+            }
+            
+        elif mode == "full":
+            # Posture extraction
+            history_len = min(5, len(landmarks_history))
+            recent_frames = landmarks_history[-history_len:]
+            
+            neck_angles = []
+            shoulder_diffs = []
+            
+            for frame_dict in recent_frames:
+                frame = frame_dict.get("landmarks", []) if isinstance(frame_dict, dict) else frame_dict
+                nose = frame[0] if len(frame) > 0 else {}
+                l_shoulder = frame[11] if len(frame) > 11 else (frame[1] if len(frame) > 1 else {})
+                r_shoulder = frame[12] if len(frame) > 12 else (frame[2] if len(frame) > 2 else {})
+                
+                neck_angles.append(abs(nose.get('y', 0.3) - l_shoulder.get('y', 0.5)) * 100)
+                shoulder_diffs.append(abs(l_shoulder.get('y', 0.5) - r_shoulder.get('y', 0.5)) * 100)
+                
+            neck_angle = sum(neck_angles) / len(neck_angles)
+            shoulder_diff = sum(shoulder_diffs) / len(shoulder_diffs)
+            posture_score = max(0.0, 100.0 - (neck_angle * 1.5) - (shoulder_diff * 4.0))
+
+            # Tremor extraction
+            tremor_health_score = max(0.0, 100.0 - (tremor_prob * 80.0))
+            freq = 4.0 + (tremor_prob * 4.5) if tremor_prob > 0.2 else 0.0
+            amp = tremor_prob * 6.5
+            
+            # Combine logic
+            lowest_score = min(posture_score, tremor_health_score)
+            
+            status = "Normal (Good)"
+            rec = "No significant abnormalities detected in posture or stability."
+            
+            if tremor_prob > 0.6:
+                status = "Action Tremor Detected"
+                rec = "High-frequency tremor detected. May indicate Parkinson's or Essential Tremor."
+            elif shoulder_diff > 12.0:
+                status = "Potential Scoliosis Detected"
+                rec = "Significant uneven shoulder height detected."
+            elif neck_angle > 18.0:
+                status = "Potential Kyphosis Detected"
+                rec = "Extreme forward head tilt detected."
+            elif tremor_prob > 0.25:
+                status = "Mild Tremor"
+                rec = "Mild physiological tremor detected."
+                
+            return {
+                "score": round(lowest_score, 1),
+                "status": status,
+                "recommendation": rec,
+                "metrics": {
+                    "neck_angle": round(neck_angle * 1.8, 1),
+                    "shoulder_alignment": round(shoulder_diff * 1.5, 1),
+                    "tremor_prob": round(tremor_prob, 2),
+                    "tremor_freq": round(freq, 1)
                 }
             }
         

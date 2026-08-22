@@ -29,7 +29,10 @@ if os.path.exists(MODEL_PATH):
         base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
         options = vision.PoseLandmarkerOptions(
             base_options=base_options,
-            output_segmentation_masks=False
+            output_segmentation_masks=False,
+            min_pose_detection_confidence=0.75,
+            min_pose_presence_confidence=0.75,
+            min_tracking_confidence=0.75
         )
         detector = vision.PoseLandmarker.create_from_options(options)
         HAS_MEDIAPIPE = True

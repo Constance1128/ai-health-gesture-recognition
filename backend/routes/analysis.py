@@ -45,30 +45,31 @@ def analyze_frame(request: FrameRequest):
     # 3. Run Swin Transformer & BiLSTM Models via Kinesiology Engine
     evaluation = ai_engine.evaluate(session_histories[request.session_id], request.mode)
 
-    # 4. Save to SQLite database
-    metrics = evaluation.get("metrics", {})
-    m1_name, m1_val = "N/A", 0.0
-    m2_name, m2_val = "N/A", 0.0
-    
-    metric_keys = list(metrics.keys())
-    if len(metric_keys) > 0:
-        m1_name = metric_keys[0]
-        m1_val = float(metrics[m1_name])
-    if len(metric_keys) > 1:
-        m2_name = metric_keys[1]
-        m2_val = float(metrics[m2_name])
+    # 4. Save to SQLite database ONLY during SCREENING (save_result=True)
+    if request.save_result:
+        metrics = evaluation.get("metrics", {})
+        m1_name, m1_val = "N/A", 0.0
+        m2_name, m2_val = "N/A", 0.0
+        
+        metric_keys = list(metrics.keys())
+        if len(metric_keys) > 0:
+            m1_name = metric_keys[0]
+            m1_val = float(metrics[m1_name])
+        if len(metric_keys) > 1:
+            m2_name = metric_keys[1]
+            m2_val = float(metrics[m2_name])
 
-    save_to_db(
-        session_id=request.session_id, 
-        mode=request.mode, 
-        status=evaluation["status"], 
-        m1_name=m1_name, 
-        m1_val=m1_val, 
-        m2_name=m2_name, 
-        m2_val=m2_val, 
-        rec=evaluation["recommendation"],
-        user_email=request.user_email
-    )
+        save_to_db(
+            session_id=request.session_id, 
+            mode=request.mode, 
+            status=evaluation["status"], 
+            m1_name=m1_name, 
+            m1_val=m1_val, 
+            m2_name=m2_name, 
+            m2_val=m2_val, 
+            rec=evaluation["recommendation"],
+            user_email=request.user_email
+        )
 
     # 5. Return response
     return AnalysisResponse(
@@ -79,7 +80,7 @@ def analyze_frame(request: FrameRequest):
         prediction=evaluation.get("prediction", evaluation["status"]),
         explanation=evaluation.get("explanation", f"Detailed findings for {request.mode} analysis indicate {evaluation['status']}."),
         landmarks=[JointPoint(**lm) for lm in landmarks],
-        metrics={k: float(v) for k, v in metrics.items()},
+        metrics={k: float(v) for k, v in evaluation.get("metrics", {}).items()},
         timestamp=time.time(),
         is_fallback=tracker_result.get("is_fallback", False)
     )

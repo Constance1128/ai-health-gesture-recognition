@@ -1,3 +1,4 @@
+import os
 import numpy as np
 
 HAS_TF = False
@@ -38,6 +39,13 @@ class TemporalFlowNetwork:
         
         self.model = Model(inputs=inputs, outputs=outputs)
         self.model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+        
+        weights_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "weights", "flow_model.weights.h5")
+        if os.path.exists(weights_path):
+            self.model.load_weights(weights_path)
+            print("   [LSTM] Loaded pre-trained weights.")
+        else:
+            print("   [LSTM] No saved weights found — starting fresh training.")
 
     def analyze_flow(self, sequence: np.ndarray) -> float:
         """

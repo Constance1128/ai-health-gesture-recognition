@@ -78,8 +78,8 @@ export const drawSkeleton = (
     const p1 = landmarks[i1];
     const p2 = landmarks[i2];
     if (!p1 || !p2) return;
-    // Skip joints that are not visible/detected
-    if (p1.visibility !== undefined && p2.visibility !== undefined && (p1.visibility < 0.05 || p2.visibility < 0.05)) return;
+    // We remove strict visibility checks to ensure skeleton lines always draw if coordinates exist
+
 
     // Compute stability (variance) of these two joints
     const variance = getJointsVariance([i1, i2], landmarkHistory);
@@ -106,8 +106,7 @@ export const drawSkeleton = (
   ctx.shadowBlur = 0;
   landmarks.forEach((lm, index) => {
     if (calibrationMode === 'half' && index >= 25) return;
-    // Skip drawing if joint is not visible/detected
-    if (!lm || (lm.visibility !== undefined && lm.visibility < 0.05)) return;
+    if (!lm) return;
 
     ctx.beginPath();
     ctx.arc(lm.x * canvasWidth, lm.y * canvasHeight, 5, 0, 2 * Math.PI);
@@ -118,46 +117,87 @@ export const drawSkeleton = (
     ctx.stroke();
   });
 
-  // Draw joint angles
-  const drawAngle = (p1Idx: number, p2Idx: number, p3Idx: number) => {
-    if (calibrationMode === 'half' && (p2Idx >= 23)) return; // skip lower body for half mode
-    const p1 = landmarks[p1Idx];
-    const p2 = landmarks[p2Idx]; // Vertex
-    const p3 = landmarks[p3Idx];
+  // In half-body mode, the user is often sitting, so hips (23, 24) are hidden.
+  // We create a virtual point straight down from the shoulder to represent the torso line.
+  const getVirtualHip = (shoulder: JointPoint) => {
+    if (!shoulder) return undefined;
+    return { x: shoulder.x, y: shoulder.y + 0.2, z: shoulder.z, visibility: shoulder.visibility, name: 'virtual_hip' } as JointPoint;
+  };
 
-    // Only calculate if all three joints are visible/detected
-    if (
-      p1 && p2 && p3 &&
-      (p1.visibility === undefined || p1.visibility >= 0.05) &&
-      (p2.visibility === undefined || p2.visibility >= 0.05) &&
-      (p3.visibility === undefined || p3.visibility >= 0.05)
-    ) {
+  const lShoulder = landmarks[11];
+  const rShoulder = landmarks[12];
+  
+  // Temporarily insert virtual hips if in half-body mode to calculate shoulder angle
+  const p23 = (calibrationMode === 'half') ? getVirtualHip(lShoulder) : landmarks[23];
+  const p24 = (calibrationMode === 'half') ? getVirtualHip(rShoulder) : landmarks[24];
+
+  // Modified drawAngle that accepts JointPoint directly instead of indices
+  const drawAnglePoints = (p1: JointPoint | undefined, p2: JointPoint | undefined, p3: JointPoint | undefined) => {
+    if (p1 && p2 && p3) {
       const angle = calculateJointAngle(p1, p2, p3);
+      const angle1 = Math.atan2(p1.y - p2.y, p1.x - p2.x);
+      const angle2 = Math.atan2(p3.y - p2.y, p3.x - p2.x);
+      let diff = angle2 - angle1;
+      while (diff < -Math.PI) diff += 2 * Math.PI;
+      while (diff > Math.PI) diff -= 2 * Math.PI;
+      const anticlockwise = diff < 0;
+      const radius = 35;
+      const cx = p2.x * canvasWidth;
+      const cy = p2.y * canvasHeight;
+
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, radius, angle1, angle2, anticlockwise);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.4)';
+      ctx.fill();
+      
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, angle1, angle2, anticlockwise);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#10b981';
+      ctx.stroke();
+
       const text = `${Math.round(angle)}°`;
-      const tx = p2.x * canvasWidth + 12;
-      const ty = p2.y * canvasHeight - 12;
+      const tx = cx + 20;
+      const ty = cy - 20;
 
       ctx.font = 'bold 18px sans-serif';
-      // Draw text outline for visibility
-      ctx.lineWidth = 3;
+      ctx.lineWidth = 4;
       ctx.strokeStyle = '#000000';
       ctx.strokeText(text, tx, ty);
-      // Draw text fill
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = '#34d399'; 
       ctx.fillText(text, tx, ty);
     }
   };
 
-  drawAngle(11, 13, 15); // Left Elbow
-  drawAngle(12, 14, 16); // Right Elbow
-  drawAngle(23, 11, 13); // Left Shoulder
-  drawAngle(24, 12, 14); // Right Shoulder
+  drawAnglePoints(landmarks[11], landmarks[13], landmarks[15]); // Left Elbow
+  drawAnglePoints(landmarks[12], landmarks[14], landmarks[16]); // Right Elbow
+  drawAnglePoints(p23, landmarks[11], landmarks[13]); // Left Shoulder (Uses virtual hip if half)
+  drawAnglePoints(p24, landmarks[12], landmarks[14]); // Right Shoulder (Uses virtual hip if half)
+
+  // Neck Angle (Forward Head Posture for Kyphosis / Text Neck)
+  if (landmarks[0] && landmarks[11] && landmarks[12]) {
+    const midShoulder = {
+      x: (landmarks[11].x + landmarks[12].x) / 2,
+      y: (landmarks[11].y + landmarks[12].y) / 2,
+      z: 0,
+      visibility: 1
+    } as JointPoint;
+    const virtualSpineBase = {
+      x: midShoulder.x,
+      y: midShoulder.y + 0.3,
+      z: 0,
+      visibility: 1
+    } as JointPoint;
+    drawAnglePoints(landmarks[0], midShoulder, virtualSpineBase);
+  }
 
   if (calibrationMode === 'full') {
-    drawAngle(23, 25, 27); // Left Knee
-    drawAngle(24, 26, 28); // Right Knee
-    drawAngle(11, 23, 25); // Left Hip
-    drawAngle(12, 24, 26); // Right Hip
+    drawAnglePoints(landmarks[23], landmarks[25], landmarks[27]); // Left Knee
+    drawAnglePoints(landmarks[24], landmarks[26], landmarks[28]); // Right Knee
+    drawAnglePoints(landmarks[11], landmarks[23], landmarks[25]); // Left Hip
+    drawAnglePoints(landmarks[12], landmarks[24], landmarks[26]); // Right Hip
   }
 };
 
@@ -245,7 +285,8 @@ export const drawPoseAngles = (
   ctx: CanvasRenderingContext2D,
   landmarks: JointPoint[],
   canvasWidth: number,
-  canvasHeight: number
+  canvasHeight: number,
+  calibrationMode: 'full' | 'half' = 'full'
 ) => {
   if (!landmarks || landmarks.length === 0) return;
 
@@ -297,7 +338,7 @@ export const drawPoseAngles = (
   // Helper to get a landmark if visible enough
   const get = (idx: number): JointPoint | null => {
     const p = lm[idx];
-    if (!p || (p.visibility !== undefined && p.visibility < 0.15)) return null;
+    if (!p) return null; // only skip truly null/undefined
     return p;
   };
 
@@ -332,32 +373,34 @@ export const drawPoseAngles = (
     drawAngleBadge(px(rShoulder) + 30, py(rShoulder) - 10, angle, 0, 60, 'R.Shoulder');
   }
 
-  // Left knee
-  const lKnee = get(25), lAnkle = get(27);
-  if (lHip && lKnee && lAnkle) {
-    const angle = calculateJointAngle(lHip, lKnee, lAnkle);
-    drawAngleBadge(px(lKnee) - 28, py(lKnee), angle, 160, 180, 'L.Knee');
-  }
+  if (calibrationMode === 'full') {
+    // Left knee
+    const lKnee = get(25), lAnkle = get(27);
+    if (lHip && lKnee && lAnkle) {
+      const angle = calculateJointAngle(lHip, lKnee, lAnkle);
+      drawAngleBadge(px(lKnee) - 28, py(lKnee), angle, 160, 180, 'L.Knee');
+    }
 
-  // Right knee
-  const rKnee = get(26), rAnkle = get(28);
-  if (rHip && rKnee && rAnkle) {
-    const angle = calculateJointAngle(rHip, rKnee, rAnkle);
-    drawAngleBadge(px(rKnee) + 28, py(rKnee), angle, 160, 180, 'R.Knee');
-  }
+    // Right knee
+    const rKnee = get(26), rAnkle = get(28);
+    if (rHip && rKnee && rAnkle) {
+      const angle = calculateJointAngle(rHip, rKnee, rAnkle);
+      drawAngleBadge(px(rKnee) + 28, py(rKnee), angle, 160, 180, 'R.Knee');
+    }
 
-  // Left hip
-  const lKneeForHip = get(25);
-  if (lShoulder && lHip && lKneeForHip) {
-    const angle = calculateJointAngle(lShoulder, lHip, lKneeForHip);
-    drawAngleBadge(px(lHip) - 30, py(lHip) + 8, angle, 160, 180, 'L.Hip');
-  }
+    // Left hip
+    const lKneeForHip = get(25);
+    if (lShoulder && lHip && lKneeForHip) {
+      const angle = calculateJointAngle(lShoulder, lHip, lKneeForHip);
+      drawAngleBadge(px(lHip) - 30, py(lHip) + 8, angle, 160, 180, 'L.Hip');
+    }
 
-  // Right hip
-  const rKneeForHip = get(26);
-  if (rShoulder && rHip && rKneeForHip) {
-    const angle = calculateJointAngle(rShoulder, rHip, rKneeForHip);
-    drawAngleBadge(px(rHip) + 30, py(rHip) + 8, angle, 160, 180, 'R.Hip');
+    // Right hip
+    const rKneeForHip = get(26);
+    if (rShoulder && rHip && rKneeForHip) {
+      const angle = calculateJointAngle(rShoulder, rHip, rKneeForHip);
+      drawAngleBadge(px(rHip) + 30, py(rHip) + 8, angle, 160, 180, 'R.Hip');
+    }
   }
 };
 

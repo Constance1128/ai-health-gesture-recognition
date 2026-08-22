@@ -34,7 +34,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'screening' | 'history' | 'doctors'>('screening');
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [activeMode, setActiveMode] = useState<string>('posture');
+  const [activeMode, setActiveMode] = useState<'posture' | 'tremor' | 'gait' | 'full'>('full');
   const [cameraActive, setCameraActive] = useState<boolean>(true);
   const [screenState, setScreenState] = useState<ScreenState>('IDLE');
   const [calibrationMode, setCalibrationMode] = useState<'full' | 'half'>('full');
@@ -262,15 +262,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                         </div>
 
                         <div className="pt-2 text-left">
-                          <Text className="text-xs font-bold text-slate-800 block mb-2">CALIBRATION MODE</Text>
-                          <Radio.Group
-                            value={calibrationMode}
-                            onChange={(e) => setCalibrationMode(e.target.value)}
-                            className="w-full flex"
-                          >
-                            <Radio.Button value="full" className="flex-1 text-center font-semibold">Full Body</Radio.Button>
-                            <Radio.Button value="half" className="flex-1 text-center font-semibold">Half Body (Upper)</Radio.Button>
-                          </Radio.Group>
+                          <Text className="text-xs font-bold text-slate-800 block mb-2 text-emerald-600 text-center">✓ FULL BODY CALIBRATION ACTIVE</Text>
                         </div>
 
                         <Button
@@ -374,46 +366,6 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                     </Card>
                   )}
 
-                  {/* Workflow Controller (Select mode, Upload Video) */}
-                  <Card className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}>
-                    <div className="space-y-4">
-                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider m-0">Workflow Controller</h4>
-                      <Row gutter={16} align="middle">
-                        <Col xs={24} sm={12}>
-                          <Text style={{ display: 'block' }} className="text-[10px] text-slate-400 mb-1">Select Assessment Mode</Text>
-                          <Select
-                            className="w-full"
-                            value={activeMode}
-                            onChange={(value) => {
-                              setActiveMode(value);
-                              setScreenState('IDLE');
-                              setAnalysisResult(null);
-                            }}
-                            disabled={screenState === 'SCREENING' || screenState === 'PREPARATION' || screenState === 'COUNTDOWN'}
-                            options={[
-                              { value: 'posture', label: 'Spinal Posture Screening' },
-                              { value: 'tremor', label: 'Parkinson\'s Tremor Assessment' },
-                              { value: 'exercise', label: 'Physical Therapy Exercises' }
-                            ]}
-                          />
-                        </Col>
-                        <Col xs={24} sm={12} className="mt-4 sm:mt-0">
-                          <Text style={{ display: 'block' }} className="text-[10px] text-slate-400 mb-1">Or Upload Offline Video</Text>
-                          <Upload
-                            beforeUpload={() => false}
-                            onChange={handleVideoUpload}
-                            showUploadList={false}
-                            accept="video/*"
-                            disabled={screenState === 'SCREENING' || screenState === 'PREPARATION' || screenState === 'COUNTDOWN' || uploading}
-                          >
-                            <Button icon={<UploadOutlined />} className="w-full">
-                              Upload Video File
-                            </Button>
-                          </Upload>
-                        </Col>
-                      </Row>
-                    </div>
-                  </Card>
 
                 </Col>
 
