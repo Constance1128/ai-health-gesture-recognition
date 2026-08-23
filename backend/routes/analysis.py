@@ -6,9 +6,10 @@ import shutil
 import cv2
 import numpy as np
 import time
+import json
 
 from schemas import FrameRequest, AnalysisResponse, JointPoint
-from database import save_to_db, get_history_records
+from database import save_to_db, get_history_records, save_report_to_db
 from pose_tracker import PoseTracker, HAS_MEDIAPIPE
 from ai_models import AIKinesiologyEngine
 
@@ -55,10 +56,11 @@ def analyze_frame(request: FrameRequest):
     # 4. Save to SQLite database ONLY during SCREENING (save_result=True)
     if request.save_result:
         metrics = evaluation.get("metrics", {})
+        metrics["final_score"] = evaluation["score"]
         m1_name, m1_val = "N/A", 0.0
         m2_name, m2_val = "N/A", 0.0
         
-        metric_keys = list(metrics.keys())
+        metric_keys = [k for k in metrics.keys() if k != "final_score"]
         if len(metric_keys) > 0:
             m1_name = metric_keys[0]
             m1_val = float(metrics[m1_name])
@@ -75,7 +77,8 @@ def analyze_frame(request: FrameRequest):
             m2_name=m2_name, 
             m2_val=m2_val, 
             rec=evaluation["recommendation"],
-            user_email=request.user_email
+            user_email=request.user_email,
+            metrics_json=json.dumps(metrics)
         )
 
     # 5. Return response
@@ -231,7 +234,8 @@ async def upload_video(
         m2_val=m2_val,
         rec=evaluation["recommendation"],
         video_path=video_path,
-        user_email=user_email
+        user_email=user_email,
+        metrics_json=json.dumps(metrics)
     )
 
     return {
@@ -251,3 +255,19 @@ def get_history(email: Optional[str] = None):
         return get_history_records(limit=5000, email=email)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database fetch error: {str(e)}")
+
+from pydantic import BaseModel
+class SaveReportRequest(BaseModel):
+    session_id: str
+    report_json: dict
+
+@router.post("/save_report")
+def save_report(request: SaveReportRequest):
+    """Saves the fully generated frontend diagnosis report to the database for a session."""
+    try:
+        success = save_report_to_db(request.session_id, json.dumps(request.report_json))
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to save report to database")
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving report: {str(e)}")

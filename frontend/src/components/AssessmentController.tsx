@@ -41,8 +41,10 @@ export const AssessmentController: React.FC<AssessmentControllerProps> = ({
             }}
             disabled={screenState === 'SCREENING' || screenState === 'PREPARATION' || screenState === 'COUNTDOWN'}
             options={[
+              { value: 'full', label: 'Comprehensive Scan' },
               { value: 'posture', label: 'Posture Analysis' },
               { value: 'tremor', label: 'Tremor Assessment' },
+              { value: 'gait', label: 'Gait Analysis' },
               { value: 'exercise', label: 'Physical Therapy Exercises' }
             ]}
           />

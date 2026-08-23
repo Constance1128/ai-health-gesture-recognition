@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
-import { Layout, Row, Col, Card, Avatar, Typography, Button, Progress, Tag, Space, Divider, Select, Empty, message, Upload, Modal, Radio } from 'antd';
+import { Layout, Row, Col, Card, Avatar, Typography, Button, Progress, Tag, Space, Divider, Select, Empty, message, Upload, Modal, Radio, Descriptions, Badge } from 'antd';
 import {
   VideoCameraOutlined, HistoryOutlined, LineChartOutlined,
   CheckCircleOutlined, SettingOutlined, FilePdfOutlined, InfoCircleOutlined,
-  WarningOutlined, ReloadOutlined, LogoutOutlined, UploadOutlined, MessageOutlined
+  WarningOutlined, ReloadOutlined, LogoutOutlined, UploadOutlined, MessageOutlined, DeleteOutlined, CloseCircleFilled
 } from '@ant-design/icons';
 import { User, ScreenState } from '../../types';
 import * as sharedApi from '../../api/shared.api';
+import * as analysisApi from '../../api/analysis.api';
 import { downloadPDFReport } from '../../utils/pdfGenerator';
 import { useScreeningTimers } from '../../hooks/useScreeningTimers';
 import { useAssessmentData } from '../../hooks/useAssessmentData';
@@ -18,6 +19,28 @@ import { generateDiagnosis, DiagnosisReport } from '../../utils/postureDiagnosis
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
+
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: Error | null }> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 20, background: '#fee2e2', color: '#991b1b', borderRadius: 8 }}>
+          <h2>Something went wrong rendering the results.</h2>
+          <pre style={{ fontSize: 11 }}>{this.state.error?.toString()}</pre>
+          <pre style={{ fontSize: 11 }}>{this.state.error?.stack}</pre>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 interface PatientDashboardProps {
   currentUser: User;
@@ -32,7 +55,16 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
   handleLogout,
   isDarkMode,
 }) => {
-  const [activeTab, setActiveTab] = useState<'screening' | 'history' | 'doctors'>('screening');
+  const [activeTab, setActiveTabState] = useState<'screening' | 'history' | 'doctors'>(() => {
+    const saved = sessionStorage.getItem('dashboard_activeTab');
+    return saved ? (saved as any) : 'screening';
+  });
+  const [localName, setLocalName] = useState(currentUser.name);
+  const [avatarKey, setAvatarKey] = useState(Date.now());
+  const setActiveTab = React.useCallback((tab: 'screening' | 'history' | 'doctors') => {
+    sessionStorage.setItem('dashboard_activeTab', tab);
+    setActiveTabState(tab);
+  }, []);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [activeMode, setActiveModeState] = useState<'posture' | 'tremor' | 'gait' | 'full'>(() => {
     const saved = sessionStorage.getItem('dashboard_activeMode');
@@ -43,29 +75,11 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
     setActiveModeState(mode);
   }, []);
   const [cameraActive, setCameraActive] = useState<boolean>(true);
-  const [screenState, setScreenStateState] = useState<ScreenState>(() => {
-    const saved = sessionStorage.getItem('dashboard_screenState');
-    return saved ? (saved as ScreenState) : 'IDLE';
-  });
-  const setScreenState = React.useCallback((state: ScreenState) => {
-    sessionStorage.setItem('dashboard_screenState', state);
-    setScreenStateState(state);
-  }, []);
+  const [screenState, setScreenState] = useState<ScreenState>('IDLE');
   const [calibrationMode, setCalibrationMode] = useState<'full' | 'half'>('full');
   const [isCalibrationOk, setIsCalibrationOk] = useState<boolean>(false);
   const [calibrationDetail, setCalibrationDetail] = useState<'ok' | 'not_detected' | 'too_far' | 'too_close' | 'moving' | 'outside' | 'loading'>('not_detected');
-  const [diagnosisReport, setDiagnosisReportState] = useState<DiagnosisReport | null>(() => {
-    const saved = sessionStorage.getItem('dashboard_diagnosisReport');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { }
-    }
-    return null;
-  });
-  const setDiagnosisReport = React.useCallback((report: DiagnosisReport | null) => {
-    if (report) sessionStorage.setItem('dashboard_diagnosisReport', JSON.stringify(report));
-    else sessionStorage.removeItem('dashboard_diagnosisReport');
-    setDiagnosisReportState(report);
-  }, []);
+  const [diagnosisReport, setDiagnosisReport] = useState<DiagnosisReport | null>(null);
   const [sessionId, setSessionId] = useState<string>(`capture_${Date.now()}`);
 
   const { prepSeconds, countdownSeconds, screeningSeconds } = useScreeningTimers(
@@ -94,33 +108,33 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
     <Layout className={`min-h-screen ${isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-800'}`}>
 
       {/* Top Header */}
-      <Header className={`px-6 flex justify-between items-center border-b ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'} h-16`}>
+      <Header className={`px-3 sm:px-6 flex justify-between items-center border-b ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'} h-16`}>
         <Space size="middle" className="align-middle">
-          <div className="p-2 bg-blue-600 text-white rounded-xl flex items-center justify-center">
-            <LineChartOutlined className="text-xl" />
+          <div className="flex items-center justify-center h-10 w-10">
+            <img src="/logo.png" alt="HealthMove AI Logo" className="h-full w-full object-contain rounded-xl" />
           </div>
           <div>
             <Title level={4} className={`m-0 font-bold tracking-tight ${isDarkMode ? 'text-slate-100' : 'text-slate-950'}`}>
               HealthMove AI
             </Title>
-            <Paragraph className="text-[10px] text-slate-400 m-0 leading-none">
+            <Paragraph className="text-[10px] text-slate-400 m-0 leading-none hidden sm:block">
               Gesture & Movement Recognition System
             </Paragraph>
           </div>
         </Space>
 
-        <Space size="large" className="align-middle">
+        <Space size="small" className="align-middle">
           <Button type="text" icon={<SettingOutlined className="text-slate-400" />} onClick={() => setIsSettingsModalOpen(true)} />
-          <Divider type="vertical" className={isDarkMode ? 'border-slate-800' : 'border-slate-200'} />
-          <Space className="cursor-pointer hover:bg-slate-100 p-2 rounded-lg transition-colors dark:hover:bg-slate-800" onClick={() => setIsSettingsModalOpen(true)}>
-            <Avatar src={`http://localhost:8000/api/profile/picture/${currentUser.id}`} className="bg-blue-100 text-blue-600 font-bold">
-              {getInitials(currentUser.name)}
+          <Divider type="vertical" className={`mx-1 sm:mx-3 ${isDarkMode ? 'border-slate-800' : 'border-slate-200'}`} />
+          <div className="flex items-center gap-1 sm:gap-3 cursor-pointer hover:bg-slate-100 p-1 sm:p-2 rounded-lg transition-colors dark:hover:bg-slate-800" onClick={() => setIsSettingsModalOpen(true)}>
+            <Avatar src={`http://localhost:8000/api/profile/picture/${currentUser.id}?t=${avatarKey}`} className="bg-blue-100 text-blue-600 font-bold">
+              {getInitials(localName)}
             </Avatar>
-            <div className="text-left hidden sm:block">
-              <Text style={{ display: 'block' }} className="text-xs font-semibold leading-none">{currentUser.name}</Text>
-              <Text className="text-[10px] text-slate-400 leading-none">Patient / General User</Text>
+            <div className="text-left hidden sm:flex sm:flex-col sm:justify-center">
+              <Text style={{ display: 'block' }} className="text-xs font-semibold leading-tight">{localName}</Text>
+              <Text className="text-[10px] text-slate-400 leading-tight">Patient / General User</Text>
             </div>
-          </Space>
+          </div>
           <Button
             type="text"
             danger
@@ -129,9 +143,9 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
               clearData();
               handleLogout();
             }}
-            className="hover:bg-red-500/10 text-xs font-semibold"
+            className="hover:bg-red-500/10 text-xs font-semibold px-2 sm:px-4"
           >
-            Log Out
+            <span className="hidden sm:inline">Log Out</span>
           </Button>
         </Space>
       </Header>
@@ -141,7 +155,9 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
         <Sider
           width={240}
           theme={isDarkMode ? 'dark' : 'light'}
-          className={`border-r ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}
+          breakpoint="md"
+          collapsedWidth="0"
+          className={`border-r z-20 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}
         >
           <div className="flex flex-col h-full justify-between py-4">
             <div className="space-y-6">
@@ -188,18 +204,18 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
         {/* Main Content Area */}
         <div className="flex flex-col flex-1 h-[calc(100vh-64px)] min-w-0">
           {/* Fixed Patient Profile Bar */}
-          <div className="px-6 pt-6 pb-2 z-10 shrink-0">
+          <div className="px-3 sm:px-6 pt-3 sm:pt-6 pb-2 z-10 shrink-0">
             <div className="max-w-7xl mx-auto w-full">
               <Card className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}>
                 <Row justify="space-between" align="middle" gutter={[16, 16]}>
-                  <Col>
-                    <Space size="middle">
-                      <Avatar size={48} className="bg-blue-100 text-blue-600 font-bold text-lg">
+                  <Col xs={24} sm={16}>
+                    <Space size="middle" align="start">
+                      <Avatar size={48} className="bg-blue-100 text-blue-600 font-bold text-lg shrink-0">
                         {getInitials(currentUser.name)}
                       </Avatar>
                       <div>
                         <Title level={4} className="m-0 font-bold">{currentUser.name}</Title>
-                        <Space split={<Divider type="vertical" />} className="text-xs text-slate-400">
+                        <Space split={<Divider type="vertical" />} wrap className="text-xs text-slate-400 mt-1">
                           <span>Patient ID: #P-2026-{String(currentUser.id).padStart(4, '0')}</span>
                           <span>Age: {currentUser.age}</span>
                           <span>Gender: {currentUser.gender}</span>
@@ -207,8 +223,8 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                       </div>
                     </Space>
                   </Col>
-                  <Col>
-                    <Space>
+                  <Col xs={24} sm={8} className="flex justify-start sm:justify-end mt-2 sm:mt-0">
+                    <Space wrap>
                       {screenState === 'SCREENING' ? (
                         <Tag color="error" className="px-3 py-1 rounded-full border-0 font-semibold animate-pulse">
                           Active Assessment
@@ -228,12 +244,12 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
             </div>
           </div>
 
-          <Content className="px-6 pb-6 pt-4 relative flex-1 flex flex-col min-h-0">
-            <div className="max-w-7xl mx-auto w-full h-full flex flex-col min-h-0">
+          <Content className="px-3 sm:px-6 pb-6 pt-4 relative flex-1 flex flex-col min-h-0 overflow-y-auto custom-scrollbar">
+            <div className="max-w-7xl mx-auto w-full lg:h-full flex flex-col lg:min-h-0">
 
               {/* TAB 1: Live Detection (Webcam + 4 Steps Workflow) */}
               {activeTab === 'screening' && (
-                <div className="w-full flex-1 min-h-0 flex flex-col lg:flex-row gap-6 items-start">
+                <div className="w-full lg:flex-1 lg:min-h-0 flex flex-col lg:flex-row gap-6 items-start">
 
                   {/* Left Column - Fixed Camera Card */}
                   <div className="w-full lg:w-[55%] shrink-0">
@@ -258,14 +274,23 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                         if (detail) setCalibrationDetail(detail);
                       }}
                       onSnapshotsCollected={(snaps) => {
-                        setDiagnosisReport(generateDiagnosis(snaps));
+                        const report = generateDiagnosis(snaps, analysisResult);
+                        setDiagnosisReport(report);
+                        if (sessionId) {
+                          analysisApi.saveReport(sessionId, report)
+                            .then(() => fetchHistory())
+                            .catch(err => {
+                              console.error(err);
+                              message.error("Failed to save full diagnostic report. Please ensure the backend is restarted with the latest code.");
+                            });
+                        }
                       }}
                       sessionId={sessionId}
                     />
                   </div>
 
                   {/* Right Column - Scrollable Result & Feedback Column */}
-                  <div className="w-full lg:w-[45%] max-h-[calc(100vh-230px)] overflow-y-auto space-y-6 pr-2 custom-scrollbar">
+                  <div className="w-full lg:w-[45%] lg:max-h-[calc(100vh-230px)] lg:overflow-y-auto space-y-6 pr-2 custom-scrollbar">
 
                     {/* Calibration Feedback Panel */}
                     {(screenState === 'IDLE' || screenState === 'PREPARATION' || screenState === 'COUNTDOWN') && (
@@ -313,7 +338,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
 
                     {/* IDLE State: Start Panel */}
                     {screenState === 'IDLE' && (
-                      <div className={`h-full flex flex-col justify-between p-8 rounded-3xl border relative overflow-hidden group ${isDarkMode ? 'bg-slate-800/80 border-slate-700/50' : 'bg-white border-slate-100 shadow-2xl'}`}>
+                      <div className={`h-auto lg:h-full flex flex-col justify-between p-8 rounded-3xl border relative overflow-hidden group ${isDarkMode ? 'bg-slate-800/80 border-slate-700/50' : 'bg-white border-slate-100 shadow-2xl'}`}>
                         <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 via-indigo-500 to-purple-500 opacity-50" />
 
                         <div>
@@ -389,91 +414,97 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
 
                     {/* FINISHED State */}
                     {screenState === 'FINISHED' && diagnosisReport && (
-                      <PostureResultsCard
-                        report={diagnosisReport}
-                        analysisResult={analysisResult}
-                        dbHistory={dbHistory}
-                        isDarkMode={isDarkMode}
-                        onNewScreening={() => {
-                          setScreenState('IDLE');
-                          setAnalysisResult(null);
-                          setDiagnosisReport(null);
-                          setIsCalibrationOk(false);
-                          setCalibrationDetail('not_detected');
-                        }}
-                      />
+                      <ErrorBoundary>
+                        <PostureResultsCard
+                          report={diagnosisReport}
+                          analysisResult={analysisResult}
+                          dbHistory={dbHistory}
+                          isDarkMode={isDarkMode}
+                          onNewScreening={() => {
+                            setScreenState('IDLE');
+                            setAnalysisResult(null);
+                            setDiagnosisReport(null);
+                            setIsCalibrationOk(false);
+                            setCalibrationDetail('not_detected');
+                          }}
+                        />
+                      </ErrorBoundary>
                     )}
 
                     {/* Fallback Finished */}
                     {screenState === 'FINISHED' && !diagnosisReport && analysisResult && (
-                      <div className={`p-8 rounded-3xl border shadow-2xl ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100'}`}>
-                        <h2 className="text-2xl font-black text-slate-800 mb-6">Assessment Complete</h2>
-                        <div className={`p-6 rounded-2xl mb-6 text-center ${analysisResult?.status === 'Normal' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-                          <h3 className="text-xl font-bold uppercase tracking-wider">{analysisResult?.status}</h3>
+                      <ErrorBoundary>
+                        <div className={`p-8 rounded-3xl border shadow-2xl ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100'}`}>
+                          <h2 className="text-2xl font-black text-slate-800 mb-6">Assessment Complete</h2>
+                          <div className={`p-6 rounded-2xl mb-6 text-center ${analysisResult?.status === 'Normal' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+                            <h3 className="text-xl font-bold uppercase tracking-wider">{analysisResult?.status}</h3>
+                          </div>
+                          <Button
+                            block size="large" type="primary"
+                            onClick={() => { setScreenState('IDLE'); setAnalysisResult(null); }}
+                            className="h-14 rounded-xl text-sm font-bold shadow-lg"
+                          >
+                            Run New Assessment
+                          </Button>
                         </div>
-                        <Button
-                          block size="large" type="primary"
-                          onClick={() => { setScreenState('IDLE'); setAnalysisResult(null); }}
-                          className="h-14 rounded-xl text-sm font-bold shadow-lg"
-                        >
-                          Run New Assessment
-                        </Button>
-                      </div>
+                      </ErrorBoundary>
                     )}
 
                     {/* Add Assessment Metrics and Recent History in FINISHED State */}
                     {screenState === 'FINISHED' && (
-                      <>
-                        {analysisResult && (
-                          <Card
-                            title="Assessment Metrics"
-                            className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
-                          >
-                            <div className="space-y-4">
-                              <div>
-                                <div className="flex justify-between text-xs mb-1">
-                                  <span className="text-slate-500 font-semibold">Movement Score</span>
-                                  <span className="font-bold text-slate-800">{(analysisResult.score).toFixed(0)}/100</span>
-                                </div>
-                                <Progress percent={Math.round(analysisResult.score)} showInfo={false} strokeColor="#000" strokeWidth={6} />
-                              </div>
-                              {analysisResult.metrics && Object.keys(analysisResult.metrics).length > 0 && (
+                      <ErrorBoundary>
+                        <>
+                          {analysisResult && (
+                            <Card
+                              title="Assessment Metrics"
+                              className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
+                            >
+                              <div className="space-y-4">
                                 <div>
                                   <div className="flex justify-between text-xs mb-1">
-                                    <span className="text-slate-500 font-semibold">Stability Index</span>
-                                    <span className="font-bold text-slate-800">
-                                      {(Object.values(analysisResult.metrics)[0] * 10).toFixed(1)}/10
-                                    </span>
+                                    <span className="text-slate-500 font-semibold">Movement Score</span>
+                                    <span className="font-bold text-slate-800">{Number(analysisResult.score || 0).toFixed(0)}/100</span>
                                   </div>
-                                  <Progress percent={Math.round(Object.values(analysisResult.metrics)[0] * 100)} showInfo={false} strokeColor="#000" strokeWidth={6} />
+                                  <Progress percent={Math.round(analysisResult.score || 0)} showInfo={false} strokeColor="#000" strokeWidth={6} />
                                 </div>
-                              )}
+                                {analysisResult.metrics && Object.keys(analysisResult.metrics).length > 0 && (
+                                  <div>
+                                    <div className="flex justify-between text-xs mb-1">
+                                      <span className="text-slate-500 font-semibold">Stability Index</span>
+                                      <span className="font-bold text-slate-800">
+                                        {(Object.values(analysisResult.metrics)[0] * 10).toFixed(1)}/10
+                                      </span>
+                                    </div>
+                                    <Progress percent={Math.round(Object.values(analysisResult.metrics)[0] * 100)} showInfo={false} strokeColor="#000" strokeWidth={6} />
+                                  </div>
+                                )}
+                              </div>
+                            </Card>
+                          )}
+
+                          <Card
+                            title="Recent Assessments"
+                            className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
+                          >
+                            <div className="space-y-3">
+                              {dbHistory.slice(0, 3).map((record) => (
+                                <div key={record.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center">
+                                  <div>
+                                    <span className="font-bold text-xs text-slate-800 block">
+                                      {new Date(record.timestamp * 1000).toLocaleDateString()}
+                                    </span>
+                                    <span className="text-[10px] text-slate-400 uppercase">{record.mode}</span>
+                                  </div>
+                                  <Tag color={record.status.toLowerCase().includes('normal') ? 'success' : 'warning'} className="border-0 font-semibold rounded-full text-[10px]">
+                                    {record.status}
+                                  </Tag>
+                                </div>
+                              ))}
+                              {dbHistory.length === 0 && <Empty description="No screening records" />}
                             </div>
                           </Card>
-                        )}
-
-                        <Card
-                          title="Recent Assessments"
-                          className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
-                        >
-                          <div className="space-y-3">
-                            {dbHistory.slice(0, 3).map((record) => (
-                              <div key={record.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center">
-                                <div>
-                                  <span className="font-bold text-xs text-slate-800 block">
-                                    {new Date(record.timestamp * 1000).toLocaleDateString()}
-                                  </span>
-                                  <span className="text-[10px] text-slate-400 uppercase">{record.mode}</span>
-                                </div>
-                                <Tag color={record.status.toLowerCase().includes('normal') ? 'success' : 'warning'} className="border-0 font-semibold rounded-full text-[10px]">
-                                  {record.status}
-                                </Tag>
-                              </div>
-                            ))}
-                            {dbHistory.length === 0 && <Empty description="No screening records" />}
-                          </div>
-                        </Card>
-                      </>
+                        </>
+                      </ErrorBoundary>
                     )}
 
                     {/* Stop Detection Button (Globally available during recording/prep) */}
@@ -500,7 +531,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
               {/* TAB 2: Health History & Trends (Figure 4.23) */}
               {activeTab === 'history' && (
                 <div className="flex-1 min-h-0 overflow-y-auto" style={{ background: '#0d1117', borderRadius: 24, padding: '24px 32px' }}>
-                  <SessionHistoryTab dbHistory={dbHistory} isDarkMode={isDarkMode} />
+                  <SessionHistoryTab dbHistory={dbHistory} isDarkMode={true} />
                 </div>
               )}
 
@@ -524,26 +555,78 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
         footer={null}
       >
         <div className="flex flex-col items-center py-6">
-          <Avatar src={`http://localhost:8000/api/profile/picture/${currentUser.id}`} size={100} className="mb-4 bg-blue-100 text-blue-600 font-bold text-3xl">
-            {getInitials(currentUser.name)}
-          </Avatar>
-          <Upload
-            showUploadList={false}
-            beforeUpload={(file) => {
-              const formData = new FormData();
-              formData.append('email', currentUser.email);
-              formData.append('file', file);
-              sharedApi.uploadProfilePicture(formData).then(() => {
-                message.success("Profile picture updated!");
-                window.location.reload();
-              }).catch(err => {
-                message.error("Failed to upload picture");
-              });
-              return false;
-            }}
+          <Badge
+            offset={[-15, 100]}
+            count={
+              <CloseCircleFilled
+                style={{ fontSize: '24px', color: '#ff4d4f', cursor: 'pointer', backgroundColor: 'white', borderRadius: '50%' }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  sharedApi.deleteProfilePicture(currentUser.id).then(() => {
+                    message.success("Profile picture removed!");
+                    setAvatarKey(Date.now());
+                  }).catch(err => {
+                    message.error("Failed to remove picture");
+                  });
+                }}
+              />
+            }
           >
-            <Button size="middle" icon={<UploadOutlined />}>Upload Profile Picture</Button>
-          </Upload>
+            <Upload
+              showUploadList={false}
+              beforeUpload={(file) => {
+                const formData = new FormData();
+                formData.append('email', currentUser.email);
+                formData.append('file', file);
+                sharedApi.uploadProfilePicture(formData).then(() => {
+                  message.success("Profile picture updated!");
+                  setAvatarKey(Date.now());
+                }).catch(err => {
+                  message.error("Failed to upload picture");
+                });
+                return false;
+              }}
+            >
+              <Avatar src={`http://localhost:8000/api/profile/picture/${currentUser.id}?t=${avatarKey}`} size={120} className="bg-blue-100 text-blue-600 font-bold text-4xl shadow-md cursor-pointer hover:opacity-80 transition-opacity">
+                {getInitials(localName)}
+              </Avatar>
+            </Upload>
+          </Badge>
+
+          <div className="w-full mt-8 text-left">
+            <Descriptions title="Profile Information" column={1} bordered size="small" className="bg-white rounded-lg overflow-hidden shadow-sm">
+              <Descriptions.Item label="Name" className="font-semibold text-slate-800">
+                <Text
+                  editable={{
+                    onChange: (newName) => {
+                      if (!newName.trim()) return;
+                      sharedApi.updateProfileName(currentUser.id, newName).then(() => {
+                        message.success("Name updated successfully!");
+                        // Update local storage so the new name persists across reloads
+                        const savedUser = localStorage.getItem('user');
+                        if (savedUser) {
+                          try {
+                            const parsed = JSON.parse(savedUser);
+                            parsed.name = newName;
+                            localStorage.setItem('user', JSON.stringify(parsed));
+                          } catch (e) { }
+                        }
+                        setLocalName(newName);
+                      }).catch(err => message.error("Failed to update name"));
+                    }
+                  }}
+                  className="m-0"
+                >
+                  {localName}
+                </Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="Email">{currentUser.email}</Descriptions.Item>
+              <Descriptions.Item label="Gender" className="capitalize">{currentUser.gender}</Descriptions.Item>
+              <Descriptions.Item label="Age">{currentUser.age} years old</Descriptions.Item>
+              <Descriptions.Item label="Birthday">{new Date(currentUser.birthday).toLocaleDateString()}</Descriptions.Item>
+              <Descriptions.Item label="Role" className="capitalize">{currentUser.role || 'General User'}</Descriptions.Item>
+            </Descriptions>
+          </div>
         </div>
       </Modal>
     </Layout>

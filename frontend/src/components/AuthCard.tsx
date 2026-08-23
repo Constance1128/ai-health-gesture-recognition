@@ -54,8 +54,8 @@ export const AuthCard: React.FC<AuthCardProps> = ({
           className={`w-full max-w-md shadow-2xl border-0 z-10 ${isDarkMode ? 'bg-slate-900/85 border border-slate-800/60' : 'bg-white/90 border border-slate-200/60'} backdrop-blur-md`}
         >
           <div className="text-center mb-6">
-            <div className="inline-flex items-center justify-center p-3 rounded-2xl bg-emerald-500/10 text-emerald-500 mb-3 animate-pulse">
-              <HeartOutlined className="text-3xl" />
+            <div className="inline-flex items-center justify-center p-0 rounded-2xl mb-3">
+              <img src="/logo.png" alt="HealthMove AI Logo" className="h-16 w-16 object-contain rounded-2xl" />
             </div>
             <Title level={3} className="m-0 tracking-tight">
               {authView === 'login' && "Welcome to AI Health Guard"}

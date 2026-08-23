@@ -46,6 +46,7 @@ export interface DBHistoryRecord {
   metric_2: { name: string; value: number };
   recommendation: string;
   video_path?: string;
+  metrics_json?: Record<string, number>;
 }
 
 export interface LogEntry {

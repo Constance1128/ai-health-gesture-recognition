@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { DatePicker, Empty, Tag, Modal, Typography } from 'antd';
 import { XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
-import { LeftOutlined } from '@ant-design/icons';
+import { LeftOutlined, CheckCircleOutlined, WarningOutlined, AlertOutlined, InfoCircleOutlined, MedicineBoxOutlined, FilePdfOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
+import { PostureResultsCard } from './PostureResultsCard';
 
 export interface HistoryRecord {
   id: number;
@@ -13,6 +15,8 @@ export interface HistoryRecord {
   metric_2: { name: string; value: number } | null;
   recommendation: string;
   video_path?: string;
+  metrics_json?: Record<string, number>;
+  report_json?: any;
 }
 
 interface SessionHistoryTabProps {
@@ -22,8 +26,25 @@ interface SessionHistoryTabProps {
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
-const getDerivedScore = (record: HistoryRecord) => {
-  // If the backend saved metrics, we can exactly reconstruct the real score!
+const getDerivedScore = (record: any) => {
+  // 1. If we have the full frontend report saved, use the EXACT score from the live detection!
+  if (record.report_json) {
+    try {
+      const report = typeof record.report_json === 'string' ? JSON.parse(record.report_json) : record.report_json;
+      if (report.score !== undefined) {
+        return report.score;
+      }
+    } catch (e) {
+      console.error("Error parsing report_json in history:", e);
+    }
+  }
+
+  // 2. For newer backend records without a full frontend report, use metrics_json
+  if (record.metrics_json && record.metrics_json.final_score !== undefined) {
+    return record.metrics_json.final_score;
+  }
+
+  // 2. Fallback for ALL older records (restoring the user's original preferred behavior!)
   if (record.metric_1 && record.metric_2) {
     if (record.mode?.toLowerCase().includes('posture')) {
       const neckAngle = record.metric_1.value / 1.8;
@@ -36,10 +57,10 @@ const getDerivedScore = (record: HistoryRecord) => {
       return Math.max(0, 100 - (tremorProb * 80.0));
     }
     if (record.mode?.toLowerCase().includes('gait') || record.mode?.toLowerCase().includes('exercise')) {
-      return record.metric_1.value; // accuracy percentage
+      return record.metric_1.value;
     }
     if (record.mode?.toLowerCase() === 'full') {
-      // In Full mode, the backend returns the lowest score among the three
+      // In old records, the history ONLY showed the posture score.
       const neckAngle = record.metric_1.value / 1.8;
       const shoulderDiff = record.metric_2.value / 1.5;
       return Math.max(0, 100 - (neckAngle * 1.5) - (shoulderDiff * 4.0));
@@ -53,14 +74,92 @@ const getDerivedScore = (record: HistoryRecord) => {
   return pseudoRandom * 20 + 65;
 };
 
-const sectionTitle = (title: string, subtitle?: string) => (
+const sectionTitle = (title: string, subtitle?: string, isDarkMode?: boolean) => (
   <div style={{ marginBottom: 16 }}>
-    <div style={{ fontSize: 16, fontWeight: 700, color: '#f1f5f9', letterSpacing: '0.02em' }}>{title}</div>
-    {subtitle && <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', marginTop: 2 }}>{subtitle}</div>}
+    <div style={{ fontSize: 16, fontWeight: 700, color: isDarkMode !== false ? '#f1f5f9' : '#0f172a', letterSpacing: '0.02em' }}>{title}</div>
+    {subtitle && <div style={{ fontSize: 12, color: isDarkMode !== false ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.4)', marginTop: 2 }}>{subtitle}</div>}
   </div>
 );
 
+// ── Severity helpers ──────────────────────────────────
+const SEVERITY_COLOR: Record<string, string> = {
+  normal: '#10b981',
+  mild: '#f59e0b',
+  moderate: '#f97316',
+  severe: '#ef4444',
+};
+
+const SEVERITY_BG: Record<string, string> = {
+  normal: 'rgba(16,185,129,0.08)',
+  mild: 'rgba(245,158,11,0.10)',
+  moderate: 'rgba(249,115,22,0.10)',
+  severe: 'rgba(239,68,68,0.10)',
+};
+
 // ── Shared Subcomponents ──────────────────────────────────────
+
+const ScoreGauge: React.FC<{ score: number; grade: string; status: string }> = ({ score, grade, status }) => {
+  const radius = 52;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDash = (score / 100) * circumference;
+  const color = score >= 75 ? '#10b981' : score >= 50 ? '#f59e0b' : '#ef4444';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <svg width="130" height="130" viewBox="0 0 130 130">
+        <circle cx="65" cy="65" r={radius} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="10" />
+        <circle
+          cx="65" cy="65" r={radius} fill="none" stroke={color} strokeWidth="10" strokeLinecap="round"
+          strokeDasharray={`${strokeDash} ${circumference - strokeDash}`} strokeDashoffset={circumference * 0.25}
+          style={{ filter: `drop-shadow(0 0 6px ${color})`, transition: 'stroke-dasharray 1s ease' }}
+        />
+        <text x="65" y="60" textAnchor="middle" fill={color} fontSize="26" fontWeight="bold" fontFamily="monospace">
+          {Math.round(score)}
+        </text>
+        <text x="65" y="76" textAnchor="middle" fill={color} fontSize="13" fontWeight="bold">
+          {grade}
+        </text>
+      </svg>
+      <p style={{ color, margin: 0, fontWeight: 700, fontSize: 14 }}>{status}</p>
+      <p style={{ color: 'rgba(255,255,255,0.4)', margin: 0, fontSize: 11 }}>Health Score</p>
+    </div>
+  );
+};
+
+const FindingCard: React.FC<{ label: string; severity: string; category: string; description: string }> = ({ label, severity, category, description }) => {
+  const color = SEVERITY_COLOR[severity] || SEVERITY_COLOR['mild'];
+  const bg = SEVERITY_BG[severity] || SEVERITY_BG['mild'];
+  const Icon = severity === 'normal' ? CheckCircleOutlined : severity === 'severe' ? AlertOutlined : WarningOutlined;
+
+  return (
+    <div style={{
+      background: bg,
+      border: `1px solid ${color}22`,
+      borderRadius: 10,
+      padding: '12px 14px',
+      display: 'flex',
+      gap: 12,
+      alignItems: 'flex-start',
+    }}>
+      <Icon style={{ color, fontSize: 16, marginTop: 2, flexShrink: 0 }} />
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <span style={{ color: '#f1f5f9', fontWeight: 700, fontSize: 13 }}>{label}</span>
+          <span style={{
+            background: `${color}22`, color, borderRadius: 4, padding: '1px 7px',
+            fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+          }}>
+            {severity}
+          </span>
+          <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11 }}>{category}</span>
+        </div>
+        <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, margin: 0, lineHeight: 1.5 }}>
+          {description}
+        </p>
+      </div>
+    </div>
+  );
+};
 
 const ScoreTrendChart = ({ data }: { data: any[] }) => {
   if (!data || data.length === 0) return <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 12 }}>No trend data available.</div>;
@@ -119,7 +218,7 @@ const ConditionFreqChart = ({ conditions }: { conditions: { name: string, count:
 
 // ── Detailed View for a Single Capture (Old Layout) ───────────
 
-const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHistory }) => {
+const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[], isDarkMode: boolean }> = ({ dbHistory, isDarkMode }) => {
   const [selectedDateStr, setSelectedDateStr] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
 
@@ -129,6 +228,18 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHi
       .map((r, i) => {
         const d = new Date(r.timestamp * 1000);
         const localDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+        let reportStatus = r.status || 'Pending';
+        let reportRec = r.recommendation || '';
+
+        if (r.report_json) {
+          try {
+            const report = typeof r.report_json === 'string' ? JSON.parse(r.report_json) : r.report_json;
+            if (report.status) reportStatus = report.status;
+            if (report.recommendation) reportRec = report.recommendation;
+          } catch (e) { }
+        }
+
         return {
           id: r.id,
           raw: r,
@@ -137,8 +248,8 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHi
           localDateStr,
           score: Math.round(getDerivedScore(r)),
           mode: r.mode || 'unknown',
-          status: r.status || 'Pending',
-          recommendation: r.recommendation || '',
+          status: reportStatus,
+          recommendation: reportRec,
         };
       });
   }, [dbHistory]);
@@ -160,14 +271,14 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHi
 
   // Condition frequency analysis (by status keywords)
   const conditionMap: Record<string, number> = {};
-  dbHistory.forEach(r => {
-    if (r.status) {
-      const keyword = r.status.replace(/detected|normal|issues/gi, '').trim() || r.status;
+  sessions.forEach(s => {
+    if (s.status) {
+      const keyword = s.status.replace(/detected|normal|issues/gi, '').trim() || s.status;
       conditionMap[keyword] = (conditionMap[keyword] || 0) + 1;
     }
   });
   const conditionFreq = Object.entries(conditionMap)
-    .map(([name, count]) => ({ name, count, total: dbHistory.length }))
+    .map(([name, count]) => ({ name, count, total: sessions.length }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 4);
 
@@ -178,10 +289,10 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHi
   }));
 
   const cardStyle: React.CSSProperties = {
-    background: 'rgba(255, 255, 255, 0.03)',
+    background: isDarkMode ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.02)',
     borderRadius: 16,
     padding: 24,
-    border: '1px solid rgba(255, 255, 255, 0.05)',
+    border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.05)' : '1px solid rgba(0, 0, 0, 0.05)',
   };
 
   const statBlock = (title: string, value: string | number, color: string, subtitle: string) => (
@@ -192,14 +303,166 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHi
     </div>
   );
 
+  const finalSession = sessions[sessions.length - 1];
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Rich Final Session Result Dashboard */}
+      {finalSession && finalSession.raw.report_json && (
+        <PostureResultsCard
+          report={finalSession.raw.report_json}
+          analysisResult={{
+            mode: finalSession.raw.mode,
+            status: finalSession.raw.status,
+            score: finalSession.score,
+            recommendation: finalSession.raw.recommendation,
+            metrics: finalSession.raw.metrics_json || {
+              [finalSession.raw.metric_1?.name || 'm1']: finalSession.raw.metric_1?.value || 0,
+              [finalSession.raw.metric_2?.name || 'm2']: finalSession.raw.metric_2?.value || 0
+            },
+            landmarks: [],
+            timestamp: finalSession.raw.timestamp
+          } as any}
+          isDarkMode={isDarkMode}
+          dbHistory={dbHistory as any}
+          hideNewScreeningButton={true}
+        />
+      )}
+
+      {finalSession && !finalSession.raw.report_json && (
+        <div style={{ ...cardStyle, background: 'linear-gradient(180deg, rgba(15, 23, 42, 1) 0%, rgba(30, 41, 59, 1) 100%)', border: '1px solid rgba(255,255,255,0.05)', padding: 0, overflow: 'hidden' }}>
+
+          {/* Header */}
+          <div style={{ padding: '24px 32px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+              <InfoCircleOutlined style={{ color: '#f59e0b', fontSize: 20 }} />
+              <h2 style={{ fontSize: 22, fontWeight: 800, color: '#f8fafc', margin: 0, letterSpacing: '-0.02em' }}>
+                AI {finalSession.mode.charAt(0).toUpperCase() + finalSession.mode.slice(1)} Screening — Complete
+              </h2>
+            </div>
+            <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: 13, margin: 0 }}>
+              Based on {sessions.length} frames of real-time movement analysis
+            </p>
+            <div style={{ marginTop: 16 }}>
+              <Tag color={finalSession.score >= 75 ? 'success' : finalSession.score >= 50 ? 'warning' : 'error'} style={{ fontSize: 11, fontWeight: 800, padding: '4px 12px', borderRadius: 20 }}>
+                {finalSession.status.toUpperCase()}
+              </Tag>
+            </div>
+          </div>
+
+          <div style={{ padding: '32px' }}>
+            <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+
+              {/* Score Gauge */}
+              <div style={{ flexShrink: 0 }}>
+                <ScoreGauge
+                  score={finalSession.score}
+                  grade={finalSession.score >= 90 ? 'A+' : finalSession.score >= 80 ? 'A' : finalSession.score >= 70 ? 'B' : finalSession.score >= 60 ? 'C' : 'D'}
+                  status={finalSession.score >= 75 ? 'Optimal' : finalSession.score >= 50 ? 'Below Average' : 'Action Needed'}
+                />
+              </div>
+
+              {/* AI Summary */}
+              <div style={{ flex: 1, minWidth: 300 }}>
+                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', fontWeight: 800, letterSpacing: '0.1em', marginBottom: 12 }}>AI SUMMARY</div>
+                <p style={{ color: '#cbd5e1', fontSize: 14, lineHeight: 1.6, margin: 0, marginBottom: 16 }}>
+                  {finalSession.recommendation || `The AI analyzed ${sessions.length} frames of movement to evaluate your ${finalSession.mode} condition. This data represents your conclusive results for this session.`}
+                </p>
+
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.5)', padding: '4px 10px', borderRadius: 6, fontSize: 11 }}>
+                    {Object.keys(finalSession.raw.metrics_json || {}).length || 2} metrics tracked
+                  </span>
+                  <span style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.5)', padding: '4px 10px', borderRadius: 6, fontSize: 11 }}>
+                    {finalSession.score >= 75 ? '0 abnormalities' : 'Abnormalities detected'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* AI Detected Findings */}
+            <div style={{ marginTop: 40 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                <MedicineBoxOutlined style={{ color: '#10b981', fontSize: 16 }} />
+                <div style={{ fontSize: 13, color: '#f8fafc', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                  AI Detected Findings
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {finalSession.raw.metrics_json ? (
+                  Object.entries(finalSession.raw.metrics_json).map(([k, v]) => (
+                    <FindingCard
+                      key={k}
+                      label={k.replace(/_/g, ' ')}
+                      severity={finalSession.status.toLowerCase().includes('normal') ? 'normal' : 'moderate'}
+                      category="Measurement"
+                      description={`Your ${k.replace(/_/g, ' ').toLowerCase()} was measured at ${Number(v).toFixed(2)}. ${finalSession.status.toLowerCase().includes('normal') ? 'This falls within a healthy range.' : 'This measurement may indicate an area of concern.'}`}
+                    />
+                  ))
+                ) : (
+                  <>
+                    {finalSession.raw.metric_1 && (
+                      <FindingCard
+                        label={finalSession.raw.metric_1.name.replace(/_/g, ' ')}
+                        severity={finalSession.status.toLowerCase().includes('normal') ? 'normal' : 'moderate'}
+                        category="Measurement"
+                        description={`Your ${finalSession.raw.metric_1.name.replace(/_/g, ' ').toLowerCase()} was measured at ${Number(finalSession.raw.metric_1.value).toFixed(2)}.`}
+                      />
+                    )}
+                    {finalSession.raw.metric_2 && (
+                      <FindingCard
+                        label={finalSession.raw.metric_2.name.replace(/_/g, ' ')}
+                        severity={finalSession.status.toLowerCase().includes('normal') ? 'normal' : 'moderate'}
+                        category="Measurement"
+                        description={`Your ${finalSession.raw.metric_2.name.replace(/_/g, ' ').toLowerCase()} was measured at ${Number(finalSession.raw.metric_2.value).toFixed(2)}.`}
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* PDF Button */}
+            <div style={{ marginTop: 24, display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => {
+                  import('../utils/pdfGenerator').then(({ downloadPDFReport }) => {
+                    const mockResult = {
+                      mode: finalSession.raw.mode,
+                      status: finalSession.raw.status,
+                      score: finalSession.score,
+                      recommendation: finalSession.raw.recommendation,
+                      metrics: finalSession.raw.metrics_json || {
+                        [finalSession.raw.metric_1?.name || 'm1']: finalSession.raw.metric_1?.value || 0,
+                        [finalSession.raw.metric_2?.name || 'm2']: finalSession.raw.metric_2?.value || 0
+                      },
+                      landmarks: [],
+                      timestamp: finalSession.raw.timestamp
+                    };
+                    downloadPDFReport(mockResult as any, dbHistory as any);
+                  });
+                }}
+                style={{
+                  padding: '12px 24px', background: '#3b82f6', color: 'white', borderRadius: 8,
+                  border: 'none', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center',
+                  gap: 8, boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)'
+                }}
+              >
+                <FilePdfOutlined style={{ fontSize: 16 }} />
+                Download Full PDF Report
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Stats Row */}
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
         {statBlock('Best Score', bestScore, '#10b981', 'All-time highest')}
         {statBlock('Avg Score', avgScore, '#3b82f6', 'Overall performance')}
-        {statBlock('Good Posture', `${goodStreak}`, '#f59e0b', 'Sessions > 70')}
-        {statBlock('Recent Avg', last7Avg, '#8b5cf6', 'Last 7 sessions')}
+        {statBlock('Good Posture', `${goodStreak}`, '#f59e0b', 'Frames > 70')}
+        {statBlock('Recent Avg', last7Avg, '#8b5cf6', 'Last 7 frames')}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
@@ -214,7 +477,7 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHi
         {/* Condition Frequency */}
         {conditionFreq.length > 0 && (
           <div style={cardStyle}>
-            {sectionTitle('Condition Frequency', 'How often each status appeared across all sessions')}
+            {sectionTitle('Condition Frequency', 'How often each status appeared across all sessions', isDarkMode)}
             <ConditionFreqChart conditions={conditionFreq} />
           </div>
         )}
@@ -223,28 +486,7 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHi
       {/* Session log */}
       <div style={cardStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
-          {sectionTitle('Session Log', 'All recorded sessions')}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-          }}>
-            <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 13, fontWeight: 600 }}>Filter:</span>
-            <DatePicker
-              format="YYYY-MM-DD"
-              onChange={(date, dateString) => {
-                const ds = Array.isArray(dateString) ? dateString[0] : dateString;
-                setSelectedDateStr(date ? ds : null);
-              }}
-              placeholder="All Dates"
-              style={{
-                background: 'rgba(255,255,255,0.05)',
-                borderColor: 'rgba(255,255,255,0.1)',
-                color: '#f1f5f9',
-                borderRadius: 8,
-              }}
-            />
-          </div>
+          {sectionTitle('Session Log', 'All recorded sessions', isDarkMode)}
         </div>
 
         {filteredLogSessions.length === 0 ? (
@@ -261,8 +503,8 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHi
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
-                  background: 'rgba(255,255,255,0.03)',
-                  border: '1px solid rgba(255,255,255,0.05)',
+                  background: isDarkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)',
+                  border: isDarkMode ? '1px solid rgba(255,255,255,0.05)' : '1px solid rgba(0,0,0,0.05)',
                   borderRadius: 10,
                   padding: '12px 16px',
                   flexWrap: 'wrap',
@@ -270,8 +512,8 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHi
                   cursor: 'pointer',
                   transition: 'background 0.2s',
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.08)'}
-                onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+                onMouseEnter={(e) => e.currentTarget.style.background = isDarkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = isDarkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <div style={{
@@ -290,8 +532,8 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHi
                     {s.score}
                   </div>
                   <div>
-                    <div style={{ color: '#f1f5f9', fontWeight: 600, fontSize: 13 }}>{s.label} — {s.fullDate}</div>
-                    <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 11, textTransform: 'uppercase' }}>
+                    <div style={{ color: isDarkMode ? '#f1f5f9' : '#0f172a', fontWeight: 600, fontSize: 13 }}>{s.label} — {s.fullDate}</div>
+                    <div style={{ color: isDarkMode ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.4)', fontSize: 11, textTransform: 'uppercase' }}>
                       {s.mode} mode
                     </div>
                   </div>
@@ -364,15 +606,26 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHi
             <div style={{ padding: '16px', background: '#f8fafc', borderRadius: 12, border: '1px solid #e2e8f0' }}>
               <div style={{ fontSize: 12, color: '#64748b', fontWeight: 'bold', marginBottom: 12, textTransform: 'uppercase' }}>Detailed Metrics</div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-                <span style={{ fontWeight: 500, color: '#334155' }}>{activeSession.raw.metric_1?.name?.replace(/_/g, ' ') || 'Primary Metric'}</span>
-                <span style={{ fontWeight: 700, color: '#0f172a' }}>{Number(activeSession.raw.metric_1?.value ?? 0).toFixed(2)}</span>
-              </div>
+              {activeSession.raw.metrics_json ? (
+                Object.entries(activeSession.raw.metrics_json).map(([k, v]) => (
+                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+                    <span style={{ fontWeight: 500, color: '#334155', textTransform: 'capitalize' }}>{k.replace(/_/g, ' ')}</span>
+                    <span style={{ fontWeight: 700, color: '#0f172a' }}>{Number(v).toFixed(2)}</span>
+                  </div>
+                ))
+              ) : (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+                    <span style={{ fontWeight: 500, color: '#334155' }}>{activeSession.raw.metric_1?.name?.replace(/_/g, ' ') || 'Primary Metric'}</span>
+                    <span style={{ fontWeight: 700, color: '#0f172a' }}>{Number(activeSession.raw.metric_1?.value ?? 0).toFixed(2)}</span>
+                  </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ fontWeight: 500, color: '#334155' }}>{activeSession.raw.metric_2?.name?.replace(/_/g, ' ') || 'Secondary Metric'}</span>
-                <span style={{ fontWeight: 700, color: '#0f172a' }}>{Number(activeSession.raw.metric_2?.value ?? 0).toFixed(2)}</span>
-              </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontWeight: 500, color: '#334155' }}>{activeSession.raw.metric_2?.name?.replace(/_/g, ' ') || 'Secondary Metric'}</span>
+                    <span style={{ fontWeight: 700, color: '#0f172a' }}>{Number(activeSession.raw.metric_2?.value ?? 0).toFixed(2)}</span>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Video or Snapshot playback if exists */}
@@ -396,6 +649,80 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHi
                 </Typography.Paragraph>
               </div>
             )}
+
+            {/* AI Diagnosis Findings (if report_json exists) */}
+            {activeSession.raw.report_json && activeSession.raw.report_json.findings && activeSession.raw.report_json.findings.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 12 }}>AI Findings & Analysis</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {activeSession.raw.report_json.findings.map((f: any, i: number) => (
+                    <FindingCard
+                      key={i}
+                      label={f.label}
+                      severity={f.severity}
+                      category={f.affectedArea || 'General'}
+                      description={f.description}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {activeSession.raw.report_json && activeSession.raw.report_json.conditions && activeSession.raw.report_json.conditions.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 12 }}>Potential Conditions Flagged</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {activeSession.raw.report_json.conditions.map((c: any, i: number) => (
+                    <div key={i} style={{ padding: 12, background: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: 8 }}>
+                      <div style={{ fontWeight: 700, color: '#ef4444' }}>{c.name} ({c.probability}% Match)</div>
+                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>{c.description}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Joint Angle Measurements (if report_json exists) */}
+        {activeSession && activeSession.raw.report_json && activeSession.raw.report_json.measurements && activeSession.raw.report_json.measurements.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 12 }}>Joint Angle Measurements</div>
+            <div style={{ background: '#f8fafc', borderRadius: 10, padding: '0 12px', border: '1px solid #e2e8f0' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 100px 70px', gap: 8, padding: '8px 0', borderBottom: '1px solid #cbd5e1' }}>
+                {['Joint', 'Measured', 'Normal Range', 'Status'].map(h => (
+                  <div key={h} style={{ color: '#64748b', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', textAlign: h === 'Status' ? 'right' : 'left' }}>
+                    {h}
+                  </div>
+                ))}
+              </div>
+              {activeSession.raw.report_json.measurements.map((m: any, i: number) => {
+                const color = m.status === 'normal' ? '#10b981' : m.status === 'mild' ? '#eab308' : m.status === 'moderate' ? '#f59e0b' : '#ef4444';
+                return (
+                  <div key={m.joint} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 100px 70px', gap: 8, alignItems: 'center', padding: '10px 0', borderBottom: i === activeSession.raw.report_json.measurements.length - 1 ? 'none' : '1px solid #e2e8f0' }}>
+                    <div>
+                      <div style={{ color: '#0f172a', fontWeight: 600, fontSize: 13 }}>{m.joint}</div>
+                      <div style={{ color: '#64748b', fontSize: 10 }}>{m.description}</div>
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ color, fontWeight: 700, fontSize: 14, fontFamily: 'monospace' }}>{m.measured.toFixed(1)}{m.unit}</div>
+                      <div style={{ color: '#94a3b8', fontSize: 9 }}>Norm: {m.normalMin}–{m.normalMax}</div>
+                    </div>
+                    <div style={{ position: 'relative' }}>
+                      <div style={{ background: '#e2e8f0', borderRadius: 4, height: 6, overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.min(100, Math.max(0, (m.measured / (m.normalMax * 1.5)) * 100))}%`, background: color, height: '100%', borderRadius: 4 }} />
+                      </div>
+                      <div style={{ position: 'absolute', top: 0, left: `${(m.normalMin / (m.normalMax * 1.5)) * 100}%`, width: `${((m.normalMax - m.normalMin) / (m.normalMax * 1.5)) * 100}%`, height: 6, border: '1px solid rgba(0,0,0,0.2)', borderRadius: 4, pointerEvents: 'none' }} />
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <span style={{ background: `${color}22`, color, borderRadius: 4, padding: '2px 8px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase' }}>
+                        {m.status === 'normal' ? '✓ OK' : m.status}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </Modal>
@@ -407,7 +734,7 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[] }> = ({ dbHi
 
 // ── Main Controller Component ─────────────────────────────────
 
-export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({ dbHistory }) => {
+export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({ dbHistory, isDarkMode }) => {
   const [selectedCaptureId, setSelectedCaptureId] = useState<string | null>(null);
 
   // Group the flat dbHistory rows into unique captures using session_id
@@ -456,7 +783,10 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({ dbHistory 
     }).sort((a, b) => b.timestamp - a.timestamp); // newest captures first
   }, [dbHistory]);
 
-  const [selectedDateStr, setSelectedDateStr] = useState<string | null>(null);
+  const [selectedDateStr, setSelectedDateStr] = useState<string | null>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
 
   const filteredCaptures = useMemo(() => {
     if (!selectedDateStr) return captures;
@@ -485,7 +815,12 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({ dbHistory 
               background: 'rgba(59, 130, 246, 0.1)',
               borderRadius: 8,
               alignSelf: 'flex-start',
-              transition: 'background 0.2s'
+              transition: 'all 0.2s ease',
+              position: 'sticky',
+              top: 16,
+              zIndex: 100,
+              backdropFilter: 'blur(12px)',
+              boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
             }}
             onMouseEnter={e => e.currentTarget.style.background = 'rgba(59, 130, 246, 0.2)'}
             onMouseLeave={e => e.currentTarget.style.background = 'rgba(59, 130, 246, 0.1)'}
@@ -498,7 +833,7 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({ dbHistory 
           </div>
 
           {/* Render the full dashboard, but pass ONLY the records from this specific capture! */}
-          <SingleCaptureDashboard dbHistory={activeCapture.records} />
+          <SingleCaptureDashboard dbHistory={activeCapture.records as any} isDarkMode={isDarkMode || false} />
         </div>
       );
     }
@@ -521,6 +856,8 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({ dbHistory 
           <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 13, fontWeight: 600 }}>Filter by Date:</span>
           <DatePicker
             format="YYYY-MM-DD"
+            value={selectedDateStr ? dayjs(selectedDateStr) : null}
+            disabledDate={(current) => current && current > dayjs().endOf('day')}
             onChange={(date, dateString) => {
               const ds = Array.isArray(dateString) ? dateString[0] : dateString;
               setSelectedDateStr(date ? ds : null);
@@ -531,6 +868,29 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({ dbHistory 
               borderColor: 'rgba(255,255,255,0.1)',
               color: '#f1f5f9',
               borderRadius: 8,
+            }}
+            cellRender={(current: any, info: any) => {
+              const d = current as any;
+              if (info.type !== 'date' || !d || !d.date) return info.originNode || d;
+              const dateStr = `${d.year()}-${String(d.month() + 1).padStart(2, '0')}-${String(d.date()).padStart(2, '0')}`;
+              const hasDetections = captures.some(c => c.localDateStr === dateStr);
+              return (
+                <div className="ant-picker-cell-inner" style={{ position: 'relative' }}>
+                  {d.date()}
+                  {hasDetections && (
+                    <div style={{
+                      position: 'absolute',
+                      bottom: 0,
+                      left: '50%',
+                      transform: 'translateX(-50%)',
+                      width: 4,
+                      height: 4,
+                      borderRadius: '50%',
+                      backgroundColor: '#3b82f6'
+                    }} />
+                  )}
+                </div>
+              );
             }}
           />
         </div>

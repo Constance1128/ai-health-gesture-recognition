@@ -57,6 +57,20 @@ def init_db():
         except sqlite3.OperationalError:
             pass
 
+        # Database Migration: Add metrics_json column if it doesn't exist
+        try:
+            cursor.execute("ALTER TABLE analysis_history ADD COLUMN metrics_json TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+        # Database Migration: Add report_json column if it doesn't exist
+        try:
+            cursor.execute("ALTER TABLE analysis_history ADD COLUMN report_json TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
         # Database Migration: Add user_email column if it doesn't exist
         try:
             cursor.execute("ALTER TABLE analysis_history ADD COLUMN user_email TEXT")
@@ -390,20 +404,40 @@ def update_user_password(email: str, password_raw: str) -> bool:
         if conn:
             conn.close()
 
-def save_to_db(session_id: str, mode: str, status: str, m1_name: str, m1_val: float, m2_name: str, m2_val: float, rec: str, video_path: str = None, user_email: str = None):
-    """Saves an analysis record to the SQLite database, including optional video path and user email."""
+def save_to_db(session_id: str, mode: str, status: str, m1_name: str, m1_val: float, m2_name: str, m2_val: float, rec: str, video_path: str = None, user_email: str = None, metrics_json: str = None, report_json: str = None):
+    """Saves an analysis record to the SQLite database, including optional video path, user email, full metrics JSON, and full frontend report JSON."""
     conn = None
     try:
         conn = sqlite3.connect(DB_FILE, timeout=30.0)
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO analysis_history 
-            (session_id, timestamp, mode, status, metric_1_name, metric_1_value, metric_2_name, metric_2_value, recommendation, video_path, user_email)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, time.time(), mode, status, m1_name, m1_val, m2_name, m2_val, rec, video_path, user_email.lower() if user_email else None))
+            (session_id, timestamp, mode, status, metric_1_name, metric_1_value, metric_2_name, metric_2_value, recommendation, video_path, user_email, metrics_json, report_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, time.time(), mode, status, m1_name, m1_val, m2_name, m2_val, rec, video_path, user_email.lower() if user_email else None, metrics_json, report_json))
         conn.commit()
     except Exception as e:
         print(f"Database save error: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+def save_report_to_db(session_id: str, report_json: str) -> bool:
+    """Updates all records for a given session with the final full frontend report JSON."""
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE analysis_history 
+            SET report_json = ? 
+            WHERE session_id = ?
+        """, (report_json, session_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Database save_report error: {e}")
+        return False
     finally:
         if conn:
             conn.close()
@@ -417,7 +451,7 @@ def get_history_records(limit: int = 50, email: str = None) -> List[Dict[str, An
         
         if email:
             cursor.execute("""
-                SELECT id, session_id, timestamp, mode, status, metric_1_name, metric_1_value, metric_2_name, metric_2_value, recommendation, video_path
+                SELECT id, session_id, timestamp, mode, status, metric_1_name, metric_1_value, metric_2_name, metric_2_value, recommendation, video_path, metrics_json, report_json
                 FROM analysis_history
                 WHERE user_email = ?
                 ORDER BY id DESC
@@ -425,7 +459,7 @@ def get_history_records(limit: int = 50, email: str = None) -> List[Dict[str, An
             """, (email.lower(), limit))
         else:
             cursor.execute("""
-                SELECT id, session_id, timestamp, mode, status, metric_1_name, metric_1_value, metric_2_name, metric_2_value, recommendation, video_path
+                SELECT id, session_id, timestamp, mode, status, metric_1_name, metric_1_value, metric_2_name, metric_2_value, recommendation, video_path, metrics_json, report_json
                 FROM analysis_history
                 WHERE user_email IS NULL
                 ORDER BY id DESC
@@ -434,7 +468,20 @@ def get_history_records(limit: int = 50, email: str = None) -> List[Dict[str, An
             
         rows = cursor.fetchall()
         history = []
+        import json
         for r in rows:
+            metrics_parsed = {}
+            if len(r) > 11 and r[11]:
+                try:
+                    metrics_parsed = json.loads(r[11])
+                except Exception:
+                    pass
+            report_parsed = None
+            if len(r) > 12 and r[12]:
+                try:
+                    report_parsed = json.loads(r[12])
+                except Exception:
+                    pass
             history.append({
                 "id": r[0],
                 "session_id": r[1],
@@ -444,7 +491,9 @@ def get_history_records(limit: int = 50, email: str = None) -> List[Dict[str, An
                 "metric_1": {"name": r[5], "value": r[6]},
                 "metric_2": {"name": r[7], "value": r[8]},
                 "recommendation": r[9],
-                "video_path": r[10]
+                "video_path": r[10],
+                "metrics_json": metrics_parsed,
+                "report_json": report_parsed
             })
         return history
     except Exception as e:
@@ -825,6 +874,20 @@ def get_message_file(message_id: int) -> Optional[Dict[str, Any]]:
     except Exception as e:
         print(f"Error getting message file: {e}")
         return None
+    finally:
+        if conn:
+            conn.close()
+def update_user_name(user_id: int, name: str) -> bool:
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET name = ? WHERE id = ?", (name, user_id))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"Error updating user name: {e}")
+        return False
     finally:
         if conn:
             conn.close()

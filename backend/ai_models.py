@@ -56,9 +56,11 @@ class SwinTransformerClassifier:
         self.model = Model(inputs=inputs, outputs=outputs)
         self.model.compile(optimizer='adam', loss='binary_crossentropy')
         
+        self.weights_loaded = False
         weights_path = os.path.join(os.path.dirname(__file__), "weights", "tremor_model.weights.h5")
         if os.path.exists(weights_path):
             self.model.load_weights(weights_path)
+            self.weights_loaded = True
             print("   [Swin] Loaded pre-trained weights.")
         else:
             print("   [Swin] No saved weights found — starting fresh training.")
@@ -66,34 +68,47 @@ class SwinTransformerClassifier:
     def predict(self, sequence: np.ndarray) -> float:
         """
         Predicts tremor probability (0.0 to 1.0).
-        If TensorFlow is not installed, runs a mathematical simulation.
+        Includes a strict motion gate to ensure perfectly still hands return 0%.
         """
-        if HAS_TF and self.model is not None:
+        wrist_coords = sequence[:, 4*3 : 5*3]
+        if len(wrist_coords) < 5:
+            return 0.0
+            
+        # Calculate true movement variance across time to act as a gate
+        left_wrist_coords = []
+        right_wrist_coords = []
+        for frame in sequence:
+            frame_joints = frame.reshape(33, 3)
+            left_wrist_coords.append([frame_joints[15][0], frame_joints[15][1]])
+            right_wrist_coords.append([frame_joints[16][0], frame_joints[16][1]])
+            
+        l_coords = np.array(left_wrist_coords)
+        r_coords = np.array(right_wrist_coords)
+        
+        # Variance of X and Y over time (axis=0)
+        l_var = np.mean(np.var(l_coords, axis=0)) if len(l_coords) > 5 else 0
+        r_var = np.mean(np.var(r_coords, axis=0)) if len(r_coords) > 5 else 0
+        true_variance = max(l_var, r_var)
+        
+        # MOTION GATE: If the hand is practically perfectly still, it CANNOT be a tremor.
+        # This overrides any false positives from the AI model or the legacy sigmoid logic.
+        # Lowered to 0.0001 to ensure subtle Parkinson's tremors are not blocked.
+        if true_variance < 0.0001:
+            return 0.0
+            
+        if HAS_TF and self.model is not None and self.weights_loaded:
             # Reshape to add batch dimension (1, seq_len, input_dim)
             inputs = np.expand_dims(sequence, axis=0)
             pred = self.model.predict(inputs, verbose=0)
             return float(pred[0][0])
         else:
-            # High-fidelity NumPy Simulation of the Swin Transformer Forward Pass
-            # We compute the variance of the coordinates over time (specifically the wrist)
-            # and run it through a sigmoid activation to simulate the network.
-            # In a real model, this represents the attention-weighting of high-frequency noise.
-            wrist_coords = sequence[:, 4*3 : 5*3] # Wrist joint index is 4
-            if len(wrist_coords) < 3:
-                return 0.0
+            # Fallback legacy NumPy simulation
+            # Using the original steep sigmoid logic
+            threshold = 0.002
+            steepness = 3000
             
-            # Apply a simple low-pass filter (moving average) to reduce MediaPipe jitter
-            smoothed_wrist = np.copy(wrist_coords)
-            for i in range(1, len(wrist_coords) - 1):
-                smoothed_wrist[i] = (wrist_coords[i-1] + wrist_coords[i] + wrist_coords[i+1]) / 3.0
-            
-            # Calculate high-frequency delta (derivative) to extract micro-oscillations
-            deltas = np.diff(smoothed_wrist, axis=0)
-            variance = np.var(deltas)
-            
-            # Sigmoid activation function
-            # Scaled so that standard breathing/movement is low, but rapid shaking results in high probability
-            probability = 1.0 / (1.0 + np.exp(-(variance * 20.0 - 3.0)))
+            # Use true_variance instead of the buggy spatial variance from original code
+            probability = 1.0 / (1.0 + np.exp(-steepness * (true_variance - threshold)))
             return float(probability)
 
 # =====================================================================
@@ -126,9 +141,11 @@ class BiLSTMGaitAnalyzer:
         self.model = Model(inputs=inputs, outputs=outputs)
         self.model.compile(optimizer='adam', loss='mean_squared_error')
         
+        self.weights_loaded = False
         weights_path = os.path.join(os.path.dirname(__file__), "weights", "gait_model.weights.h5")
         if os.path.exists(weights_path):
             self.model.load_weights(weights_path)
+            self.weights_loaded = True
             print("   [BiLSTM] Loaded pre-trained weights.")
         else:
             print("   [BiLSTM] No saved weights found — starting fresh training.")
@@ -138,7 +155,7 @@ class BiLSTMGaitAnalyzer:
         Analyzes movement sequence and returns a symmetry score between 0.0 and 1.0.
         (1.0 means perfect left-right symmetry, lower means asymmetrical gait/movement).
         """
-        if HAS_TF and self.model is not None:
+        if HAS_TF and self.model is not None and self.weights_loaded:
             inputs = np.expand_dims(sequence, axis=0)
             pred = self.model.predict(inputs, verbose=0)
             return float(pred[0][0])
@@ -395,12 +412,23 @@ class AIKinesiologyEngine:
                 l_shoulder = frame[11] if len(frame) > 11 else (frame[1] if len(frame) > 1 else {})
                 r_shoulder = frame[12] if len(frame) > 12 else (frame[2] if len(frame) > 2 else {})
                 
-                neck_angles.append(abs(nose.get('y', 0.3) - l_shoulder.get('y', 0.5)) * 100)
-                shoulder_diffs.append(abs(l_shoulder.get('y', 0.5) - r_shoulder.get('y', 0.5)) * 100)
+                # Normalize distances by shoulder width to make them distance-invariant
+                shoulder_width = max(0.05, abs(l_shoulder.get('x', 0.6) - r_shoulder.get('x', 0.4)))
+                
+                # neck length is usually ~50% of shoulder width. 
+                # (0.5 * 100) = 50. In the old logic, 0.2 distance * 100 = 20.
+                # We'll scale it so that normal posture stays around 10-20.
+                raw_neck = abs(nose.get('y', 0.3) - l_shoulder.get('y', 0.5))
+                raw_shoulder = abs(l_shoulder.get('y', 0.5) - r_shoulder.get('y', 0.5))
+                
+                neck_angles.append((raw_neck / shoulder_width) * 40.0) 
+                shoulder_diffs.append((raw_shoulder / shoulder_width) * 50.0)
                 
             neck_angle = sum(neck_angles) / len(neck_angles)
             shoulder_diff = sum(shoulder_diffs) / len(shoulder_diffs)
-            posture_score = max(0.0, 100.0 - (neck_angle * 1.5) - (shoulder_diff * 4.0))
+            
+            # More forgiving multipliers
+            posture_score = max(0.0, 100.0 - (max(0, neck_angle - 15) * 1.5) - (shoulder_diff * 3.0))
 
             # Tremor extraction
             tremor_health_score = max(0.0, 100.0 - (tremor_prob * 80.0))
@@ -408,17 +436,13 @@ class AIKinesiologyEngine:
             amp = tremor_prob * 6.5
             
             # Combine logic
-            lowest_score = min(posture_score, tremor_health_score)
+            lowest_score = posture_score  # The user wants Full mode to be graded on Posture primarily
             
             status = "Normal"
             rec = "No significant abnormalities detected in posture or stability."
             explanation = "Your overall posture and movement stability are within the normal healthy range."
             
-            if tremor_prob > 0.6:
-                status = "Essential Tremor"
-                rec = "High-frequency action tremor detected."
-                explanation = "A high-frequency tremor was detected in your wrist, matching Essential Tremor."
-            elif shoulder_diff > 15.0:
+            if shoulder_diff > 15.0:
                 status = "Scoliosis"
                 rec = "Significant uneven shoulder height detected."
                 explanation = f"Your shoulders have an uneven height difference of {shoulder_diff:.1f} degrees, indicating Scoliosis."
@@ -426,6 +450,10 @@ class AIKinesiologyEngine:
                 status = "Kyphosis"
                 rec = "Extreme forward head tilt detected."
                 explanation = f"Your neck is tilted forward by {neck_angle:.1f} degrees while your shoulders are hunched, indicating Kyphosis."
+            elif tremor_prob > 0.6:
+                status = "Essential Tremor"
+                rec = "High-frequency action tremor detected."
+                explanation = "A high-frequency tremor was detected in your wrist, matching Essential Tremor."
             elif tremor_prob > 0.25:
                 status = "Parkinson's Disease"
                 rec = "Resting tremor detected."

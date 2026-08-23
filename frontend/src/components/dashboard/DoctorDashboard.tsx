@@ -229,8 +229,8 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
       {/* Top Header */}
       <Header className={`px-6 flex justify-between items-center border-b ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'} h-16`}>
         <Space size="middle" className="align-middle">
-          <div className="p-2 bg-blue-600 text-white rounded-xl flex items-center justify-center">
-            <LineChartOutlined className="text-xl" />
+          <div className="flex items-center justify-center h-10 w-10">
+            <img src="/logo.png" alt="HealthMove AI Logo" className="h-full w-full object-contain rounded-xl" />
           </div>
           <div>
             <Title level={4} className={`m-0 font-bold tracking-tight ${isDarkMode ? 'text-slate-100' : 'text-slate-950'}`}>

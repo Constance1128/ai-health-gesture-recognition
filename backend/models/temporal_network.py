@@ -40,9 +40,11 @@ class TemporalFlowNetwork:
         self.model = Model(inputs=inputs, outputs=outputs)
         self.model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
         
+        self.weights_loaded = False
         weights_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "weights", "flow_model.weights.h5")
         if os.path.exists(weights_path):
             self.model.load_weights(weights_path)
+            self.weights_loaded = True
             print("   [LSTM] Loaded pre-trained weights.")
         else:
             print("   [LSTM] No saved weights found — starting fresh training.")
@@ -52,7 +54,7 @@ class TemporalFlowNetwork:
         Analyzes the flow of movement.
         Returns a score from 0.0 to 1.0 (smooth, correct flow).
         """
-        if HAS_TF and self.model is not None:
+        if HAS_TF and self.model is not None and self.weights_loaded:
             # Add batch dimension
             inputs = np.expand_dims(sequence, axis=0)
             pred = self.model.predict(inputs, verbose=0)

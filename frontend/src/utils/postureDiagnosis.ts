@@ -127,7 +127,7 @@ export function buildSnapshot(landmarks: JointPoint[]): PostureSnapshot {
 // Main diagnosis engine
 // ────────────────────────────────────────────
 
-export function generateDiagnosis(snapshots: PostureSnapshot[]): DiagnosisReport {
+export function generateDiagnosis(snapshots: PostureSnapshot[], analysisResult: any = null): DiagnosisReport {
   if (snapshots.length === 0) {
     return {
       score: 0,
@@ -141,350 +141,428 @@ export function generateDiagnosis(snapshots: PostureSnapshot[]): DiagnosisReport
     };
   }
 
-  // ── 1. Collect metrics across frames ──────
-  const shoulderAsymmetries: number[] = [];
-  const hipTilts: number[] = [];
-  const headForwardOffsets: number[] = [];
-  const leftElbowAngles: number[] = [];
-  const rightElbowAngles: number[] = [];
-  const leftKneeAngles: number[] = [];
-  const rightKneeAngles: number[] = [];
-  const spineAngles: number[] = []; // rough vertical alignment
+  try {
+    // ── 1. Collect metrics across frames ──────
+    const shoulderAsymmetries: number[] = [];
+    const hipTilts: number[] = [];
+    const headForwardOffsets: number[] = [];
+    const leftElbowAngles: number[] = [];
+    const rightElbowAngles: number[] = [];
+    const leftKneeAngles: number[] = [];
+    const rightKneeAngles: number[] = [];
+    const spineAngles: number[] = []; // rough vertical alignment
 
-  snapshots.forEach(s => {
-    const { nose, leftShoulder, rightShoulder, leftElbow, leftWrist, rightElbow, rightWrist, leftHip, rightHip, leftKnee, leftAnkle, rightKnee, rightAnkle } = s;
+    snapshots.forEach(s => {
+      const { nose, leftShoulder, rightShoulder, leftElbow, leftWrist, rightElbow, rightWrist, leftHip, rightHip, leftKnee, leftAnkle, rightKnee, rightAnkle } = s;
 
-    // Shoulder height asymmetry (in normalised coords, multiply by 100 for "percent of frame")
-    if (leftShoulder && rightShoulder &&
-      (leftShoulder.visibility ?? 1) > 0.3 &&
-      (rightShoulder.visibility ?? 1) > 0.3) {
-      const diff = Math.abs(leftShoulder.y - rightShoulder.y) * 100;
-      shoulderAsymmetries.push(diff);
+      // Shoulder height asymmetry (in normalised coords, multiply by 100 for "percent of frame")
+      if (leftShoulder && rightShoulder &&
+        (leftShoulder.visibility ?? 1) > 0.3 &&
+        (rightShoulder.visibility ?? 1) > 0.3) {
+        const diff = Math.abs(leftShoulder.y - rightShoulder.y) * 100;
+        shoulderAsymmetries.push(diff);
 
-      // Head forward posture: nose X vs midpoint of shoulders
-      if (nose && (nose.visibility ?? 1) > 0.3) {
-        const midShoulderX = (leftShoulder.x + rightShoulder.x) / 2;
-        const offset = Math.abs(nose.x - midShoulderX) * 100;
-        headForwardOffsets.push(offset);
+        // Head forward posture: nose X vs midpoint of shoulders
+        if (nose && (nose.visibility ?? 1) > 0.3) {
+          const midShoulderX = (leftShoulder.x + rightShoulder.x) / 2;
+          const offset = Math.abs(nose.x - midShoulderX) * 100;
+          headForwardOffsets.push(offset);
+        }
+
+        // Spine angle: deviation of midpoint-shoulder from midpoint-hip vertical axis
+        if (leftHip && rightHip && (leftHip.visibility ?? 1) > 0.3 && (rightHip.visibility ?? 1) > 0.3) {
+          const midShoulderX = (leftShoulder.x + rightShoulder.x) / 2;
+          const midHipX = (leftHip.x + rightHip.x) / 2;
+          const midShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+          const midHipY = (leftHip.y + rightHip.y) / 2;
+          const dx = midShoulderX - midHipX;
+          const dy = midHipY - midShoulderY; // positive when shoulders above hips
+          const spineAngle = Math.abs(Math.atan2(dx, dy) * (180 / Math.PI));
+          spineAngles.push(spineAngle);
+
+          // Hip tilt
+          const hipDiff = Math.abs(leftHip.y - rightHip.y) * 100;
+          hipTilts.push(hipDiff);
+        }
       }
 
-      // Spine angle: deviation of midpoint-shoulder from midpoint-hip vertical axis
-      if (leftHip && rightHip && (leftHip.visibility ?? 1) > 0.3 && (rightHip.visibility ?? 1) > 0.3) {
-        const midShoulderX = (leftShoulder.x + rightShoulder.x) / 2;
-        const midHipX = (leftHip.x + rightHip.x) / 2;
-        const midShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
-        const midHipY = (leftHip.y + rightHip.y) / 2;
-        const dx = midShoulderX - midHipX;
-        const dy = midHipY - midShoulderY; // positive when shoulders above hips
-        const spineAngle = Math.abs(Math.atan2(dx, dy) * (180 / Math.PI));
-        spineAngles.push(spineAngle);
-
-        // Hip tilt
-        const hipDiff = Math.abs(leftHip.y - rightHip.y) * 100;
-        hipTilts.push(hipDiff);
+      // Elbow angles
+      if (leftShoulder && leftElbow && leftWrist &&
+        (leftShoulder.visibility ?? 1) > 0.2 && (leftElbow.visibility ?? 1) > 0.2 && (leftWrist.visibility ?? 1) > 0.2) {
+        leftElbowAngles.push(calcAngle(leftShoulder, leftElbow, leftWrist));
       }
+      if (rightShoulder && rightElbow && rightWrist &&
+        (rightShoulder.visibility ?? 1) > 0.2 && (rightElbow.visibility ?? 1) > 0.2 && (rightWrist.visibility ?? 1) > 0.2) {
+        rightElbowAngles.push(calcAngle(rightShoulder, rightElbow, rightWrist));
+      }
+
+      // Knee angles
+      if (leftHip && leftKnee && leftAnkle &&
+        (leftHip.visibility ?? 1) > 0.2 && (leftKnee.visibility ?? 1) > 0.2 && (leftAnkle.visibility ?? 1) > 0.2) {
+        leftKneeAngles.push(calcAngle(leftHip, leftKnee, leftAnkle));
+      }
+      if (rightHip && rightKnee && rightAnkle &&
+        (rightHip.visibility ?? 1) > 0.2 && (rightKnee.visibility ?? 1) > 0.2 && (rightAnkle.visibility ?? 1) > 0.2) {
+        rightKneeAngles.push(calcAngle(rightHip, rightKnee, rightAnkle));
+      }
+    });
+
+    // ── 2. Compute averages ──────────────────
+    const avgShoulderAsymmetry = getRepresentativeValue(shoulderAsymmetries);
+    const avgHipTilt = getRepresentativeValue(hipTilts);
+    const avgHeadOffset = getRepresentativeValue(headForwardOffsets);
+    const avgSpineAngle = getRepresentativeValue(spineAngles);
+    const avgLeftElbow = getRepresentativeValue(leftElbowAngles);
+    const avgRightElbow = getRepresentativeValue(rightElbowAngles);
+    const avgLeftKnee = getRepresentativeValue(leftKneeAngles);
+    const avgRightKnee = getRepresentativeValue(rightKneeAngles);
+
+    console.log('[Diagnosis] Calculated Averages:', {
+      avgShoulderAsymmetry,
+      avgHipTilt,
+      avgHeadOffset,
+      avgSpineAngle,
+      avgLeftElbow,
+      avgRightElbow,
+      avgLeftKnee,
+      avgRightKnee
+    });
+
+    // ── 3. Build findings ────────────────────
+    const findings: PostureFinding[] = [];
+
+    // Shoulder asymmetry (threshold: mild >0.8%, moderate >2.5%, severe >5%)
+    const shoulderSev = getSeverityLabel(avgShoulderAsymmetry, 0.8, 2.5, 5);
+    if (shoulderSev !== 'normal') {
+      findings.push({
+        id: 'shoulder-asymmetry',
+        severity: shoulderSev,
+        label: 'Shoulder Level Difference',
+        affectedArea: 'Shoulders',
+        description: `Your left and right shoulders are at different heights (${avgShoulderAsymmetry.toFixed(1)}% difference). This may indicate ${shoulderSev === 'severe' ? 'significant scoliosis or muscle imbalance' : shoulderSev === 'moderate' ? 'mild scoliosis or chronic posture habits' : 'minor posture imbalance or muscle tightness'}.`,
+      });
     }
 
-    // Elbow angles
-    if (leftShoulder && leftElbow && leftWrist &&
-      (leftShoulder.visibility ?? 1) > 0.2 && (leftElbow.visibility ?? 1) > 0.2 && (leftWrist.visibility ?? 1) > 0.2) {
-      leftElbowAngles.push(calcAngle(leftShoulder, leftElbow, leftWrist));
+    // Hip tilt (threshold: mild >0.8%, moderate >2.5%, severe >5%)
+    const hipSev = getSeverityLabel(avgHipTilt, 0.8, 2.5, 5);
+    if (hipSev !== 'normal') {
+      findings.push({
+        id: 'hip-tilt',
+        severity: hipSev,
+        label: 'Pelvic Tilt Detected',
+        affectedArea: 'Hips / Pelvis',
+        description: `Uneven hip height detected (${avgHipTilt.toFixed(1)}% tilt). ${hipSev === 'severe' ? 'Significant pelvic tilt may lead to lower back pain and gait asymmetry.' : hipSev === 'moderate' ? 'Moderate pelvic tilt often relates to leg length discrepancy or hip flexor tightness.' : 'Slight pelvic tilt may be due to standing posture habits.'}`,
+      });
     }
-    if (rightShoulder && rightElbow && rightWrist &&
-      (rightShoulder.visibility ?? 1) > 0.2 && (rightElbow.visibility ?? 1) > 0.2 && (rightWrist.visibility ?? 1) > 0.2) {
-      rightElbowAngles.push(calcAngle(rightShoulder, rightElbow, rightWrist));
+
+    // Forward head / spine lean (threshold: mild >1.5°, moderate >3.5°, severe >6°)
+    const spineSev = getSeverityLabel(avgSpineAngle, 1.5, 3.5, 6);
+    if (spineSev !== 'normal') {
+      findings.push({
+        id: 'spine-misalignment',
+        severity: spineSev,
+        label: 'Spine Lateral Misalignment',
+        affectedArea: 'Spine / Torso',
+        description: `The spine shows a lateral lean of approximately ${avgSpineAngle.toFixed(1)}°. ${spineSev === 'severe' ? 'This level of misalignment may indicate scoliosis or significant postural dysfunction.' : spineSev === 'moderate' ? 'Moderate curvature may relate to prolonged poor sitting habits or muscle imbalance.' : 'Minor spine lean is common and often correctable with targeted exercises.'}`,
+      });
     }
 
-    // Knee angles
-    if (leftHip && leftKnee && leftAnkle &&
-      (leftHip.visibility ?? 1) > 0.2 && (leftKnee.visibility ?? 1) > 0.2 && (leftAnkle.visibility ?? 1) > 0.2) {
-      leftKneeAngles.push(calcAngle(leftHip, leftKnee, leftAnkle));
+    // Head offset (threshold: mild >1.0%, moderate >3.0%, severe >6.0%)
+    const headSev = getSeverityLabel(avgHeadOffset, 1.0, 3.0, 6.0);
+    if (headSev !== 'normal') {
+      findings.push({
+        id: 'head-position',
+        severity: headSev,
+        label: 'Head Position Offset',
+        affectedArea: 'Neck / Cervical',
+        description: `Head is offset laterally from the body center by ${avgHeadOffset.toFixed(1)}%. ${headSev === 'severe' ? 'Severe head offset can cause chronic neck strain and cervical nerve compression.' : headSev === 'moderate' ? 'Moderate head tilt may indicate cervical muscle imbalance or habitual head position.' : 'Slight head position offset detected, likely correctable with posture awareness.'}`,
+      });
     }
-    if (rightHip && rightKnee && rightAnkle &&
-      (rightHip.visibility ?? 1) > 0.2 && (rightKnee.visibility ?? 1) > 0.2 && (rightAnkle.visibility ?? 1) > 0.2) {
-      rightKneeAngles.push(calcAngle(rightHip, rightKnee, rightAnkle));
+
+    // If no issues found, add a positive finding
+    if (findings.length === 0) {
+      findings.push({
+        id: 'normal-posture',
+        severity: 'normal',
+        label: 'Posture Within Normal Range',
+        affectedArea: 'Full Body',
+        description: 'No significant postural abnormalities were detected. Your body alignment appears to be within acceptable clinical ranges. Continue maintaining good posture habits.',
+      });
     }
-  });
 
-  // ── 2. Compute averages ──────────────────
-  const avgShoulderAsymmetry = getRepresentativeValue(shoulderAsymmetries);
-  const avgHipTilt = getRepresentativeValue(hipTilts);
-  const avgHeadOffset = getRepresentativeValue(headForwardOffsets);
-  const avgSpineAngle = getRepresentativeValue(spineAngles);
-  const avgLeftElbow = getRepresentativeValue(leftElbowAngles);
-  const avgRightElbow = getRepresentativeValue(rightElbowAngles);
-  const avgLeftKnee = getRepresentativeValue(leftKneeAngles);
-  const avgRightKnee = getRepresentativeValue(rightKneeAngles);
+    // ── 4. Build conditions ──────────────────────────────────
+    const conditions: PossibleCondition[] = [];
 
-  console.log('[Diagnosis] Calculated Averages:', {
-    avgShoulderAsymmetry,
-    avgHipTilt,
-    avgHeadOffset,
-    avgSpineAngle,
-    avgLeftElbow,
-    avgRightElbow,
-    avgLeftKnee,
-    avgRightKnee
-  });
+    // ── Scoliosis (shoulder + hip + spine asymmetry) ─────────
+    const scoliosisRisk = clamp(
+      Math.round((avgShoulderAsymmetry * 6) + (avgHipTilt * 5) + (avgSpineAngle * 4)),
+      0, 100
+    );
+    if (scoliosisRisk > 15) {
+      conditions.push({
+        name: 'Scoliosis (Spinal Curvature)',
+        risk: scoliosisRisk > 60 ? 'high' : scoliosisRisk > 35 ? 'moderate' : 'low',
+        probability: scoliosisRisk,
+        description: 'Lateral curvature of the spine. Indicated by shoulder/hip asymmetry and spine lateral lean.',
+      });
+    }
 
-  // ── 3. Build findings ────────────────────
-  const findings: PostureFinding[] = [];
+    // ── Forward Head Posture / Text Neck ─────────────────────
+    const fhpRisk = clamp(Math.round(avgHeadOffset * 8), 0, 100);
+    if (fhpRisk > 20) {
+      conditions.push({
+        name: 'Text Neck / Forward Head Posture',
+        risk: fhpRisk > 65 ? 'high' : fhpRisk > 40 ? 'moderate' : 'low',
+        probability: fhpRisk,
+        description: 'Head positioned forward of the body center. Increases strain on the cervical spine and neck muscles. Common from prolonged phone/computer use.',
+      });
+    }
 
-  // Shoulder asymmetry (threshold: mild >0.8%, moderate >2.5%, severe >5%)
-  const shoulderSev = getSeverityLabel(avgShoulderAsymmetry, 0.8, 2.5, 5);
-  if (shoulderSev !== 'normal') {
-    findings.push({
-      id: 'shoulder-asymmetry',
-      severity: shoulderSev,
-      label: 'Shoulder Level Difference',
-      affectedArea: 'Shoulders',
-      description: `Your left and right shoulders are at different heights (${avgShoulderAsymmetry.toFixed(1)}% difference). This may indicate ${shoulderSev === 'severe' ? 'significant scoliosis or muscle imbalance' : shoulderSev === 'moderate' ? 'mild scoliosis or chronic posture habits' : 'minor posture imbalance or muscle tightness'}.`,
-    });
+    // ── Pelvic Imbalance / Leg Length Discrepancy ─────────────
+    const pelvicRisk = clamp(Math.round(avgHipTilt * 12), 0, 100);
+    if (pelvicRisk > 20) {
+      conditions.push({
+        name: 'Pelvic Imbalance / Leg Length Discrepancy',
+        risk: pelvicRisk > 60 ? 'high' : pelvicRisk > 35 ? 'moderate' : 'low',
+        probability: pelvicRisk,
+        description: 'Unequal hip height may indicate leg length discrepancy, hip flexor tightness, or structural pelvic imbalance.',
+      });
+    }
+
+    // ── Kyphosis (rounded upper back) ─────────────────────────
+    const kyphosisRisk = clamp(Math.round((avgSpineAngle * 5) + (avgShoulderAsymmetry * 3)), 0, 100);
+    if (kyphosisRisk > 20) {
+      conditions.push({
+        name: 'Postural Kyphosis (Rounded Shoulders / Hunchback)',
+        risk: kyphosisRisk > 65 ? 'high' : kyphosisRisk > 40 ? 'moderate' : 'low',
+        probability: kyphosisRisk,
+        description: 'Excessive forward rounding of the upper back. Commonly caused by prolonged sitting, weak upper back muscles, or Scheuermann\'s disease.',
+      });
+    }
+
+    // ── Lordosis (excessive lower back curve) ─────────────────
+    // Proxy: large hip tilt with forward trunk lean
+    const lordosisRisk = clamp(Math.round(avgHipTilt * 8 + avgSpineAngle * 2), 0, 100);
+    if (lordosisRisk > 25 && avgHipTilt > 3) {
+      conditions.push({
+        name: 'Lordosis (Excessive Lumbar Arch)',
+        risk: lordosisRisk > 60 ? 'high' : lordosisRisk > 35 ? 'moderate' : 'low',
+        probability: lordosisRisk,
+        description: 'Excessive inward curvature of the lower spine. Often caused by weak core muscles, tight hip flexors, or obesity. Can lead to lower back pain.',
+      });
+    }
+
+    // ── Flat Back Syndrome ────────────────────────────────────
+    // Proxy: very small spine angle variation (abnormally straight)
+    const flatBackRisk = clamp(Math.round(Math.max(0, 5 - avgSpineAngle) * 10), 0, 60);
+    if (flatBackRisk > 25 && avgShoulderAsymmetry < 2 && avgSpineAngle < 2) {
+      conditions.push({
+        name: 'Flat Back Syndrome',
+        risk: 'low',
+        probability: flatBackRisk,
+        description: 'Reduced natural spinal curves making the back appear unusually straight. Can cause difficulty standing for long periods and lower back fatigue.',
+      });
+    }
+
+    // ── Frozen Shoulder / Adhesive Capsulitis ─────────────────
+    const avgElbowDiff = Math.abs((avgLeftElbow || 0) - (avgRightElbow || 0));
+    const frozenShoulderRisk = clamp(Math.round(avgElbowDiff * 2 + avgShoulderAsymmetry * 4), 0, 100);
+    if (frozenShoulderRisk > 25 && avgElbowDiff > 15) {
+      conditions.push({
+        name: 'Frozen Shoulder (Adhesive Capsulitis)',
+        risk: frozenShoulderRisk > 60 ? 'high' : frozenShoulderRisk > 35 ? 'moderate' : 'low',
+        probability: frozenShoulderRisk,
+        description: 'Significant asymmetry between left and right arm range of motion detected. May indicate restricted shoulder joint movement on one side.',
+      });
+    }
+
+    // ── Knock Knees (Genu Valgum) ─────────────────────────────
+    const avgKneeDiff = Math.abs((avgLeftKnee || 0) - (avgRightKnee || 0));
+    const knockKneeRisk = clamp(Math.round(avgKneeDiff * 2.5 + avgHipTilt * 3), 0, 100);
+    if (knockKneeRisk > 25 && avgKneeDiff > 10) {
+      conditions.push({
+        name: 'Knock Knees / Bow Legs (Knee Alignment)',
+        risk: knockKneeRisk > 60 ? 'high' : knockKneeRisk > 35 ? 'moderate' : 'low',
+        probability: knockKneeRisk,
+        description: 'Asymmetric knee joint angles detected. May indicate genu valgum (knock knees) or genu varum (bow legs). Can lead to knee pain and early arthritis.',
+      });
+    }
+
+    // ── Stroke Recovery / Hemiplegia ──────────────────────────
+    const hemiplegiaRisk = clamp(
+      Math.round((avgShoulderAsymmetry * 5) + (avgHipTilt * 4) + (avgElbowDiff * 1.5)),
+      0, 100
+    );
+    if (hemiplegiaRisk > 35) {
+      conditions.push({
+        name: 'Stroke Recovery / Hemiplegia Indicators',
+        risk: hemiplegiaRisk > 65 ? 'high' : hemiplegiaRisk > 45 ? 'moderate' : 'low',
+        probability: hemiplegiaRisk,
+        description: 'Significant left-right asymmetry across multiple joints detected. This pattern may indicate post-stroke weakness on one side of the body. Consult a neurologist.',
+      });
+    }
+
+    // ── Parkinson's Disease (tremor model feeds this via backend) ─
+    // This is primarily detected by the backend Swin Transformer.
+    let frontendTremorScoreOverride: number | undefined = undefined;
+
+    if (analysisResult && analysisResult.metrics) {
+      let tremorProb = analysisResult.metrics.tremor_prob || 0;
+
+      // FRONTEND MOTION GATE
+      // The backend TensorFlow model sometimes hallucinates 100% tremor when perfectly still.
+      // If the user hasn't restarted their backend, we catch it here.
+      if (snapshots.length > 5) {
+        const calcVar = (arr: number[]) => {
+          const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+          return arr.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / arr.length;
+        };
+
+        const lx = snapshots.map(s => s.leftWrist?.x || 0);
+        const ly = snapshots.map(s => s.leftWrist?.y || 0);
+        const rx = snapshots.map(s => s.rightWrist?.x || 0);
+        const ry = snapshots.map(s => s.rightWrist?.y || 0);
+
+        const maxVar = Math.max(calcVar(lx), calcVar(ly), calcVar(rx), calcVar(ry));
+
+        // Calculate average shoulder width across snapshots to determine distance from camera
+        let sumShoulderWidth = 0;
+        let validShoulderFrames = 0;
+        snapshots.forEach(s => {
+          if (s.leftShoulder && s.rightShoulder) {
+            sumShoulderWidth += Math.abs(s.leftShoulder.x - s.rightShoulder.x);
+            validShoulderFrames++;
+          }
+        });
+        const avgShoulderWidth = validShoulderFrames > 0 ? sumShoulderWidth / validShoulderFrames : 0;
+
+        // 1. If perfectly still, ignore tremor (removes standing false positives)
+        // 2. If standing far away (full body mode), ignore tremor (camera resolution too low for accurate hand-shake detection)
+        if (maxVar < 0.0001 || avgShoulderWidth < 0.25) {
+          tremorProb = 0;
+        } else if (maxVar > 0.0005) {
+          // Fallback: If variance is high (vigorous shake up close), force tremor detection
+          // to bypass the backend's flawed threshold logic.
+          if (tremorProb < 0.7) tremorProb = 0.7;
+        }
+      }
+
+      if (tremorProb > 0.25) {
+        conditions.push({
+          name: tremorProb > 0.6 ? "Parkinson's Disease / Essential Tremor" : "Parkinson's Disease (Possible)",
+          risk: tremorProb > 0.6 ? 'high' : tremorProb > 0.4 ? 'moderate' : 'low',
+          probability: Math.round(tremorProb * 100),
+          description: tremorProb > 0.6
+            ? 'High-frequency tremor patterns detected matching Parkinsonian signatures or Essential Tremor. Immediate clinical assessment is advised.'
+            : 'Mild resting tremor patterns detected. Neurological assessment is recommended to rule out early-stage Parkinson\'s.',
+        });
+      }
+
+      frontendTremorScoreOverride = Math.max(0, 100 - (tremorProb * 80.0));
+    }
+
+    // ── Cerebral Palsy Indicators ────────────────────────────
+    const cpRisk = clamp(
+      Math.round((avgElbowDiff * 2) + (avgKneeDiff * 1.5) + (avgShoulderAsymmetry * 3)),
+      0, 100
+    );
+    if (cpRisk > 40) {
+      conditions.push({
+        name: 'Cerebral Palsy / Spasticity Indicators',
+        risk: cpRisk > 65 ? 'high' : cpRisk > 45 ? 'moderate' : 'low',
+        probability: cpRisk,
+        description: 'Irregular asymmetric joint movement patterns detected across multiple limbs. This may indicate spastic movement disorder. Medical evaluation recommended.',
+      });
+    }
+
+    // ── Essential Tremor (elbow angle variance proxy) ─────────
+    // Since we don't have raw temporal data at this level, we check elbow angle spread
+    if (avgElbowDiff > 20 && avgShoulderAsymmetry < 3) {
+      conditions.push({
+        name: 'Essential Tremor (Possible)',
+        risk: 'low',
+        probability: clamp(Math.round(avgElbowDiff * 2), 0, 60),
+        description: 'Minor asymmetric arm positioning detected. Essential tremor is an action tremor — a neurologist assessment with specific hand/arm movement tests is needed to confirm.',
+      });
+    }
+
+    // ── Parkinson's Disease (tremor model feeds this via backend) ─
+    // This is primarily detected by the backend Swin Transformer.
+    // If analysisResult indicates high tremor score, it appears in the conditions.
+    // (Handled separately by the backend AI — see analysisResult.tremor_score)
+
+    // ── 5. Build measurements ────────────────────────────────
+    const measurements: JointAngleMeasurement[] = [];
+
+    const addMeasurement = (
+      joint: string, description: string, value: number | null,
+      normalMin: number, normalMax: number, unit = '°',
+      mildT: number, modT: number, sevT: number
+    ): void => {
+      if (value === null || value === 0) return;
+      const deviation = Math.max(0, value < normalMin ? normalMin - value : value > normalMax ? value - normalMax : 0);
+      measurements.push({
+        joint,
+        description,
+        measured: Math.round(value * 10) / 10,
+        normalMin,
+        normalMax,
+        unit,
+        status: getSeverityLabel(deviation, mildT, modT, sevT),
+      });
+    };
+
+    addMeasurement('Shoulder Symmetry', 'L/R height difference', avgShoulderAsymmetry, 0, 1, '%', 0.8, 2.5, 5);
+    addMeasurement('Spine Lateral Angle', 'Torso vertical alignment', avgSpineAngle, 0, 2, '°', 1.5, 3.5, 6);
+    addMeasurement('Hip Tilt', 'Pelvic lateral balance', avgHipTilt, 0, 1, '%', 0.8, 2.5, 5);
+    addMeasurement('Head Offset', 'Head lateral position', avgHeadOffset, 0, 1.5, '%', 1.0, 3.0, 6.0);
+    if (avgLeftElbow > 0) addMeasurement('Left Elbow Angle', 'Elbow joint flexion', avgLeftElbow, 150, 180, '°', 10, 20, 35);
+    if (avgRightElbow > 0) addMeasurement('Right Elbow Angle', 'Elbow joint flexion', avgRightElbow, 150, 180, '°', 10, 20, 35);
+    if (avgLeftKnee > 0) addMeasurement('Left Knee Angle', 'Knee joint extension', avgLeftKnee, 160, 180, '°', 10, 20, 35);
+    if (avgRightKnee > 0) addMeasurement('Right Knee Angle', 'Knee joint extension', avgRightKnee, 160, 180, '°', 10, 20, 35);
+
+    // ── 6. Compute overall score ─────────────────────────────
+    const severityPenalty = { normal: 0, mild: 5, moderate: 15, severe: 30 };
+    let penalty = 0;
+    findings.forEach(f => { if (f.id !== 'normal-posture') penalty += severityPenalty[f.severity]; });
+    let score = clamp(100 - penalty, 0, 100);
+
+    if (frontendTremorScoreOverride !== undefined) {
+      score = Math.min(score, frontendTremorScoreOverride);
+    }
+
+    const { grade, status } = gradeFromScore(score);
+
+    // ── 7. Summary & recommendation ──────────────────────────
+    const abnormalFindings = findings.filter(f => f.id !== 'normal-posture');
+    const highRiskConditions = conditions.filter(c => c.risk === 'high');
+    const topConditions = conditions.slice(0, 3).map(c => c.name).join(', ');
+
+    const summary = abnormalFindings.length === 0
+      ? 'Your posture analysis shows no significant abnormalities. Body alignment, shoulder symmetry, and spinal curvature are all within normal clinical ranges.'
+      : `The AI detected ${abnormalFindings.length} area${abnormalFindings.length > 1 ? 's' : ''} of concern: ${abnormalFindings.map(f => f.label).join(', ')}. These findings are based on ${snapshots.length} frames of movement analysis.`;
+
+    const recommendation = abnormalFindings.length === 0
+      ? 'Continue your current posture habits. Regular stretching and core strengthening exercises are recommended. No immediate clinical consultation required based on this screening.'
+      : `⚠️ This is an AI estimate only — not a medical diagnosis. ${highRiskConditions.length > 0
+        ? `High-risk indicators suggest possible: ${highRiskConditions.map(c => c.name).join(', ')}. Please consult an orthopaedic specialist or neurologist immediately.`
+        : conditions.length > 0
+          ? `Possible conditions detected: ${topConditions}. Consider scheduling a physiotherapy or clinical assessment.`
+          : 'Postural deviations detected. Targeted stretching and posture correction exercises are recommended.'
+      }`;
+
+    return { score, grade, status, findings, conditions, measurements, summary, recommendation };
+
+  } catch (error: any) {
+    return {
+      score: 0,
+      grade: 'ERR',
+      status: 'Error',
+      findings: [{ id: 'error', severity: 'severe', label: 'Processing Error', description: error.message, affectedArea: 'System' }],
+      conditions: [],
+      measurements: [],
+      summary: `A frontend crash occurred: ${error.message} - ${error.stack}`,
+      recommendation: 'Please share this exact error message with the developers.',
+    };
   }
-
-  // Hip tilt (threshold: mild >0.8%, moderate >2.5%, severe >5%)
-  const hipSev = getSeverityLabel(avgHipTilt, 0.8, 2.5, 5);
-  if (hipSev !== 'normal') {
-    findings.push({
-      id: 'hip-tilt',
-      severity: hipSev,
-      label: 'Pelvic Tilt Detected',
-      affectedArea: 'Hips / Pelvis',
-      description: `Uneven hip height detected (${avgHipTilt.toFixed(1)}% tilt). ${hipSev === 'severe' ? 'Significant pelvic tilt may lead to lower back pain and gait asymmetry.' : hipSev === 'moderate' ? 'Moderate pelvic tilt often relates to leg length discrepancy or hip flexor tightness.' : 'Slight pelvic tilt may be due to standing posture habits.'}`,
-    });
-  }
-
-  // Forward head / spine lean (threshold: mild >1.5°, moderate >3.5°, severe >6°)
-  const spineSev = getSeverityLabel(avgSpineAngle, 1.5, 3.5, 6);
-  if (spineSev !== 'normal') {
-    findings.push({
-      id: 'spine-misalignment',
-      severity: spineSev,
-      label: 'Spine Lateral Misalignment',
-      affectedArea: 'Spine / Torso',
-      description: `The spine shows a lateral lean of approximately ${avgSpineAngle.toFixed(1)}°. ${spineSev === 'severe' ? 'This level of misalignment may indicate scoliosis or significant postural dysfunction.' : spineSev === 'moderate' ? 'Moderate curvature may relate to prolonged poor sitting habits or muscle imbalance.' : 'Minor spine lean is common and often correctable with targeted exercises.'}`,
-    });
-  }
-
-  // Head offset (threshold: mild >1.0%, moderate >3.0%, severe >6.0%)
-  const headSev = getSeverityLabel(avgHeadOffset, 1.0, 3.0, 6.0);
-  if (headSev !== 'normal') {
-    findings.push({
-      id: 'head-position',
-      severity: headSev,
-      label: 'Head Position Offset',
-      affectedArea: 'Neck / Cervical',
-      description: `Head is offset laterally from the body center by ${avgHeadOffset.toFixed(1)}%. ${headSev === 'severe' ? 'Severe head offset can cause chronic neck strain and cervical nerve compression.' : headSev === 'moderate' ? 'Moderate head tilt may indicate cervical muscle imbalance or habitual head position.' : 'Slight head position offset detected, likely correctable with posture awareness.'}`,
-    });
-  }
-
-  // If no issues found, add a positive finding
-  if (findings.length === 0) {
-    findings.push({
-      id: 'normal-posture',
-      severity: 'normal',
-      label: 'Posture Within Normal Range',
-      affectedArea: 'Full Body',
-      description: 'No significant postural abnormalities were detected. Your body alignment appears to be within acceptable clinical ranges. Continue maintaining good posture habits.',
-    });
-  }
-
-  // ── 4. Build conditions ──────────────────────────────────
-  const conditions: PossibleCondition[] = [];
-
-  // ── Scoliosis (shoulder + hip + spine asymmetry) ─────────
-  const scoliosisRisk = clamp(
-    Math.round((avgShoulderAsymmetry * 6) + (avgHipTilt * 5) + (avgSpineAngle * 4)),
-    0, 100
-  );
-  if (scoliosisRisk > 15) {
-    conditions.push({
-      name: 'Scoliosis (Spinal Curvature)',
-      risk: scoliosisRisk > 60 ? 'high' : scoliosisRisk > 35 ? 'moderate' : 'low',
-      probability: scoliosisRisk,
-      description: 'Lateral curvature of the spine. Indicated by shoulder/hip asymmetry and spine lateral lean.',
-    });
-  }
-
-  // ── Forward Head Posture / Text Neck ─────────────────────
-  const fhpRisk = clamp(Math.round(avgHeadOffset * 8), 0, 100);
-  if (fhpRisk > 20) {
-    conditions.push({
-      name: 'Text Neck / Forward Head Posture',
-      risk: fhpRisk > 65 ? 'high' : fhpRisk > 40 ? 'moderate' : 'low',
-      probability: fhpRisk,
-      description: 'Head positioned forward of the body center. Increases strain on the cervical spine and neck muscles. Common from prolonged phone/computer use.',
-    });
-  }
-
-  // ── Pelvic Imbalance / Leg Length Discrepancy ─────────────
-  const pelvicRisk = clamp(Math.round(avgHipTilt * 12), 0, 100);
-  if (pelvicRisk > 20) {
-    conditions.push({
-      name: 'Pelvic Imbalance / Leg Length Discrepancy',
-      risk: pelvicRisk > 60 ? 'high' : pelvicRisk > 35 ? 'moderate' : 'low',
-      probability: pelvicRisk,
-      description: 'Unequal hip height may indicate leg length discrepancy, hip flexor tightness, or structural pelvic imbalance.',
-    });
-  }
-
-  // ── Kyphosis (rounded upper back) ─────────────────────────
-  const kyphosisRisk = clamp(Math.round((avgSpineAngle * 5) + (avgShoulderAsymmetry * 3)), 0, 100);
-  if (kyphosisRisk > 20) {
-    conditions.push({
-      name: 'Postural Kyphosis (Rounded Shoulders / Hunchback)',
-      risk: kyphosisRisk > 65 ? 'high' : kyphosisRisk > 40 ? 'moderate' : 'low',
-      probability: kyphosisRisk,
-      description: 'Excessive forward rounding of the upper back. Commonly caused by prolonged sitting, weak upper back muscles, or Scheuermann\'s disease.',
-    });
-  }
-
-  // ── Lordosis (excessive lower back curve) ─────────────────
-  // Proxy: large hip tilt with forward trunk lean
-  const lordosisRisk = clamp(Math.round(avgHipTilt * 8 + avgSpineAngle * 2), 0, 100);
-  if (lordosisRisk > 25 && avgHipTilt > 3) {
-    conditions.push({
-      name: 'Lordosis (Excessive Lumbar Arch)',
-      risk: lordosisRisk > 60 ? 'high' : lordosisRisk > 35 ? 'moderate' : 'low',
-      probability: lordosisRisk,
-      description: 'Excessive inward curvature of the lower spine. Often caused by weak core muscles, tight hip flexors, or obesity. Can lead to lower back pain.',
-    });
-  }
-
-  // ── Flat Back Syndrome ────────────────────────────────────
-  // Proxy: very small spine angle variation (abnormally straight)
-  const flatBackRisk = clamp(Math.round(Math.max(0, 5 - avgSpineAngle) * 10), 0, 60);
-  if (flatBackRisk > 25 && avgShoulderAsymmetry < 2 && avgSpineAngle < 2) {
-    conditions.push({
-      name: 'Flat Back Syndrome',
-      risk: 'low',
-      probability: flatBackRisk,
-      description: 'Reduced natural spinal curves making the back appear unusually straight. Can cause difficulty standing for long periods and lower back fatigue.',
-    });
-  }
-
-  // ── Frozen Shoulder / Adhesive Capsulitis ─────────────────
-  const avgElbowDiff = Math.abs((avgLeftElbow || 0) - (avgRightElbow || 0));
-  const frozenShoulderRisk = clamp(Math.round(avgElbowDiff * 2 + avgShoulderAsymmetry * 4), 0, 100);
-  if (frozenShoulderRisk > 25 && avgElbowDiff > 15) {
-    conditions.push({
-      name: 'Frozen Shoulder (Adhesive Capsulitis)',
-      risk: frozenShoulderRisk > 60 ? 'high' : frozenShoulderRisk > 35 ? 'moderate' : 'low',
-      probability: frozenShoulderRisk,
-      description: 'Significant asymmetry between left and right arm range of motion detected. May indicate restricted shoulder joint movement on one side.',
-    });
-  }
-
-  // ── Knock Knees (Genu Valgum) ─────────────────────────────
-  const avgKneeDiff = Math.abs((avgLeftKnee || 0) - (avgRightKnee || 0));
-  const knockKneeRisk = clamp(Math.round(avgKneeDiff * 2.5 + avgHipTilt * 3), 0, 100);
-  if (knockKneeRisk > 25 && avgKneeDiff > 10) {
-    conditions.push({
-      name: 'Knock Knees / Bow Legs (Knee Alignment)',
-      risk: knockKneeRisk > 60 ? 'high' : knockKneeRisk > 35 ? 'moderate' : 'low',
-      probability: knockKneeRisk,
-      description: 'Asymmetric knee joint angles detected. May indicate genu valgum (knock knees) or genu varum (bow legs). Can lead to knee pain and early arthritis.',
-    });
-  }
-
-  // ── Stroke Recovery / Hemiplegia ──────────────────────────
-  const hemiplegiaRisk = clamp(
-    Math.round((avgShoulderAsymmetry * 5) + (avgHipTilt * 4) + (avgElbowDiff * 1.5)),
-    0, 100
-  );
-  if (hemiplegiaRisk > 35) {
-    conditions.push({
-      name: 'Stroke Recovery / Hemiplegia Indicators',
-      risk: hemiplegiaRisk > 65 ? 'high' : hemiplegiaRisk > 45 ? 'moderate' : 'low',
-      probability: hemiplegiaRisk,
-      description: 'Significant left-right asymmetry across multiple joints detected. This pattern may indicate post-stroke weakness on one side of the body. Consult a neurologist.',
-    });
-  }
-
-  // ── Cerebral Palsy Indicators ────────────────────────────
-  const cpRisk = clamp(
-    Math.round((avgElbowDiff * 2) + (avgKneeDiff * 1.5) + (avgShoulderAsymmetry * 3)),
-    0, 100
-  );
-  if (cpRisk > 40) {
-    conditions.push({
-      name: 'Cerebral Palsy / Spasticity Indicators',
-      risk: cpRisk > 65 ? 'high' : cpRisk > 45 ? 'moderate' : 'low',
-      probability: cpRisk,
-      description: 'Irregular asymmetric joint movement patterns detected across multiple limbs. This may indicate spastic movement disorder. Medical evaluation recommended.',
-    });
-  }
-
-  // ── Essential Tremor (elbow angle variance proxy) ─────────
-  // Since we don't have raw temporal data at this level, we check elbow angle spread
-  if (avgElbowDiff > 20 && avgShoulderAsymmetry < 3) {
-    conditions.push({
-      name: 'Essential Tremor (Possible)',
-      risk: 'low',
-      probability: clamp(Math.round(avgElbowDiff * 2), 0, 60),
-      description: 'Minor asymmetric arm positioning detected. Essential tremor is an action tremor — a neurologist assessment with specific hand/arm movement tests is needed to confirm.',
-    });
-  }
-
-  // ── Parkinson's Disease (tremor model feeds this via backend) ─
-  // This is primarily detected by the backend Swin Transformer.
-  // If analysisResult indicates high tremor score, it appears in the conditions.
-  // (Handled separately by the backend AI — see analysisResult.tremor_score)
-
-  // ── 5. Build measurements ────────────────────────────────
-  const measurements: JointAngleMeasurement[] = [];
-
-  const addMeasurement = (
-    joint: string, description: string, value: number | null,
-    normalMin: number, normalMax: number, unit = '°',
-    mildT: number, modT: number, sevT: number
-  ): void => {
-    if (value === null || value === 0) return;
-    const deviation = Math.max(0, value < normalMin ? normalMin - value : value > normalMax ? value - normalMax : 0);
-    measurements.push({
-      joint,
-      description,
-      measured: Math.round(value * 10) / 10,
-      normalMin,
-      normalMax,
-      unit,
-      status: getSeverityLabel(deviation, mildT, modT, sevT),
-    });
-  };
-
-  addMeasurement('Shoulder Symmetry', 'L/R height difference', avgShoulderAsymmetry, 0, 1, '%', 0.8, 2.5, 5);
-  addMeasurement('Spine Lateral Angle', 'Torso vertical alignment', avgSpineAngle, 0, 2, '°', 1.5, 3.5, 6);
-  addMeasurement('Hip Tilt', 'Pelvic lateral balance', avgHipTilt, 0, 1, '%', 0.8, 2.5, 5);
-  addMeasurement('Head Offset', 'Head lateral position', avgHeadOffset, 0, 1.5, '%', 1.0, 3.0, 6.0);
-  if (avgLeftElbow > 0) addMeasurement('Left Elbow Angle', 'Elbow joint flexion', avgLeftElbow, 150, 180, '°', 10, 20, 35);
-  if (avgRightElbow > 0) addMeasurement('Right Elbow Angle', 'Elbow joint flexion', avgRightElbow, 150, 180, '°', 10, 20, 35);
-  if (avgLeftKnee > 0) addMeasurement('Left Knee Angle', 'Knee joint extension', avgLeftKnee, 160, 180, '°', 10, 20, 35);
-  if (avgRightKnee > 0) addMeasurement('Right Knee Angle', 'Knee joint extension', avgRightKnee, 160, 180, '°', 10, 20, 35);
-
-  // ── 6. Compute overall score ─────────────────────────────
-  const severityPenalty = { normal: 0, mild: 5, moderate: 15, severe: 30 };
-  let penalty = 0;
-  findings.forEach(f => { if (f.id !== 'normal-posture') penalty += severityPenalty[f.severity]; });
-  const score = clamp(100 - penalty, 0, 100);
-  const { grade, status } = gradeFromScore(score);
-
-  // ── 7. Summary & recommendation ──────────────────────────
-  const abnormalFindings = findings.filter(f => f.id !== 'normal-posture');
-  const highRiskConditions = conditions.filter(c => c.risk === 'high');
-  const topConditions = conditions.slice(0, 3).map(c => c.name).join(', ');
-
-  const summary = abnormalFindings.length === 0
-    ? 'Your posture analysis shows no significant abnormalities. Body alignment, shoulder symmetry, and spinal curvature are all within normal clinical ranges.'
-    : `The AI detected ${abnormalFindings.length} area${abnormalFindings.length > 1 ? 's' : ''} of concern: ${abnormalFindings.map(f => f.label).join(', ')}. These findings are based on ${snapshots.length} frames of movement analysis.`;
-
-  const recommendation = abnormalFindings.length === 0
-    ? 'Continue your current posture habits. Regular stretching and core strengthening exercises are recommended. No immediate clinical consultation required based on this screening.'
-    : `⚠️ This is an AI estimate only — not a medical diagnosis. ${highRiskConditions.length > 0
-      ? `High-risk indicators suggest possible: ${highRiskConditions.map(c => c.name).join(', ')}. Please consult an orthopaedic specialist or neurologist immediately.`
-      : conditions.length > 0
-        ? `Possible conditions detected: ${topConditions}. Consider scheduling a physiotherapy or clinical assessment.`
-        : 'Postural deviations detected. Targeted stretching and posture correction exercises are recommended.'
-    }`;
-
-  return { score, grade, status, findings, conditions, measurements, summary, recommendation };
 }

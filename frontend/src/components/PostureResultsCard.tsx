@@ -14,8 +14,9 @@ interface PostureResultsCardProps {
   report: DiagnosisReport;
   analysisResult?: AnalysisResult | null;
   dbHistory?: DBHistoryRecord[];
-  onNewScreening: () => void;
+  onNewScreening?: () => void;
   isDarkMode: boolean;
+  hideNewScreeningButton?: boolean;
 }
 
 // ── Severity helpers ──────────────────────────────────
@@ -238,6 +239,7 @@ export const PostureResultsCard: React.FC<PostureResultsCardProps> = ({
   dbHistory = [],
   onNewScreening,
   isDarkMode,
+  hideNewScreeningButton,
 }) => {
   const cardBg = '#0d1117';
   const cardBorder = 'rgba(255,255,255,0.08)';
@@ -429,22 +431,24 @@ export const PostureResultsCard: React.FC<PostureResultsCardProps> = ({
           >
             Download PDF Report
           </Button>
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={onNewScreening}
-            style={{
-              background: 'rgba(255,255,255,0.05)',
-              border: '1px solid rgba(255,255,255,0.12)',
-              color: 'rgba(255,255,255,0.7)',
-              borderRadius: 10,
-              fontWeight: 700,
-              height: 40,
-              paddingInline: 20,
-              flex: 1,
-            }}
-          >
-            New Screening
-          </Button>
+          {!hideNewScreeningButton && onNewScreening && (
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={onNewScreening}
+              style={{
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.12)',
+                color: 'rgba(255,255,255,0.7)',
+                borderRadius: 10,
+                fontWeight: 700,
+                height: 40,
+                paddingInline: 20,
+                flex: 1,
+              }}
+            >
+              New Screening
+            </Button>
+          )}
         </div>
       </div>
     </div>

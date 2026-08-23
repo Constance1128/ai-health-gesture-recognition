@@ -9,6 +9,9 @@ export const uploadVideo = (formData: FormData) =>
 export const getScreeningHistory = (email: string) =>
   fetchApi<any[]>(`/api/history?email=${encodeURIComponent(email)}`);
 
+export const saveReport = (session_id: string, report_json: any) =>
+  fetchApi<any>('/api/save_report', { method: 'POST', body: JSON.stringify({ session_id, report_json }) });
+
 export const checkBackendStatus = async () => {
   try {
     const response = await fetch(`${BACKEND_URL}/`);

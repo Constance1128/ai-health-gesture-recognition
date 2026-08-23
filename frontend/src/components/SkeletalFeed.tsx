@@ -34,6 +34,8 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
   const calibrationDetailRef = useRef<string>('ok');
   const analysisResultRef = useRef<AnalysisResult | null>(null);
   const humanRef = useRef<any>(null);
+  const isAnalyzingRef = useRef<boolean>(false);
+  const hasSavedRef = useRef<number>(0);
   const handRef = useRef<any>(null);
   const faceRef = useRef<any>(null);
   const angleSnapshotsRef = useRef<PostureSnapshot[]>([]);
@@ -46,6 +48,7 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
     // When SCREENING begins, reset snapshot accumulator
     if (screenState === 'SCREENING') {
       angleSnapshotsRef.current = [];
+      hasSavedRef.current = 0;
     }
     // When FINISHED, pass collected snapshots up
     // When FINISHED, pass collected snapshots up, but ONLY if we actually collected them
@@ -306,20 +309,29 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
         drawScreeningHUD(ctx, canvas.width, canvas.height);
       }
 
-      // Send frame to backend every 200ms for real-time landmark data
-      if ((screenState === 'SCREENING' || screenState === 'PREPARATION') && cameraActive && timestamp - lastProcessingTime > 200) {
+      // Send frame to backend every 200ms (5 FPS) for real-time landmark data, and prevent overlapping requests
+      if ((screenState === 'SCREENING' || screenState === 'PREPARATION') && cameraActive && timestamp - lastProcessingTime > 200 && !isAnalyzingRef.current) {
         lastProcessingTime = timestamp;
         if (localLandmarksRef.current.length === 33) {
+          isAnalyzingRef.current = true;
+
+          const shouldSaveResult = screenState === 'SCREENING' && (!hasSavedRef.current || (Date.now() - hasSavedRef.current) > 1000);
+          if (shouldSaveResult) {
+            hasSavedRef.current = Date.now();
+          }
+
           analysisApi.analyzeFrame({
             mode: activeMode,
             session_id: sessionId || "patient_guided_session",
             user_email: currentUser?.email,
             landmarks: localLandmarksRef.current, // Send tiny JSON instead of massive Base64
-            save_result: screenState === 'SCREENING'
+            save_result: shouldSaveResult
           }).then(data => {
             setAnalysisResult(data);
             analysisResultRef.current = data;
-            fetchHistory(currentUser?.email);
+            if (screenState === 'SCREENING') {
+              fetchHistory(currentUser?.email);
+            }
 
             // Force instant calibration success to bypass any backend/local connection bugs
             if (screenState === 'PREPARATION' && onCalibrationStatusChange) {
@@ -327,6 +339,8 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
             }
           }).catch(err => {
             console.error("Backend frame processing error:", err);
+          }).finally(() => {
+            isAnalyzingRef.current = false;
           });
         }
       }
@@ -521,15 +535,15 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
   return (
     <Card
       title={
-        <Space>
+        <div className="flex items-center gap-2 text-sm sm:text-base">
           <VideoCameraOutlined className="text-emerald-500" />
-          <span>Live Skeletal Screening & Biofeedback</span>
-        </Space>
+          <span className="truncate">Live Skeletal Screening</span>
+        </div>
       }
-      className={`shadow-lg border-0 overflow-hidden ${isDarkMode ? 'bg-slate-900/50' : 'bg-white'}`}
+      className={`shadow-lg border-0 overflow-hidden flex-col ${isDarkMode ? 'bg-slate-900/50' : 'bg-white'}`}
       extra={
-        <Space>
-          <span className="text-xs text-slate-400">Webcam Stream</span>
+        <Space size="small">
+          <span className="text-[10px] sm:text-xs text-slate-400 hidden sm:inline">Webcam Stream</span>
           <Switch
             checked={cameraActive}
             onChange={(checked) => setCameraActive(checked)}

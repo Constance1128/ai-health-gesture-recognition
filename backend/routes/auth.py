@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Response
+from pydantic import BaseModel
 import time
 import uuid
 import os
@@ -9,7 +10,7 @@ from schemas import UserRegister, UserLogin, ForgotPasswordRequest, ResetPasswor
 from database import (
     get_user_by_email, create_user, create_doctor_user, hash_password, 
     save_reset_token, get_user_by_reset_token, update_user_password,
-    update_user_profile_picture, get_user_profile_picture
+    update_user_profile_picture, get_user_profile_picture, update_user_name
 )
 
 router = APIRouter(prefix="/api", tags=["authentication"])
@@ -59,6 +60,24 @@ def get_profile_picture(user_id: int):
         raise HTTPException(status_code=404, detail="Picture not found")
     # Using a generic media type or determining it from bytes could be better, but we will use image/jpeg as default
     return Response(content=blob, media_type="image/jpeg")
+
+@router.delete("/profile/picture/{user_id}")
+def delete_profile_picture(user_id: int):
+    success = update_user_profile_picture(user_id, None)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to remove profile picture")
+    return {"message": "Profile picture removed"}
+
+class UpdateNameRequest(BaseModel):
+    user_id: int
+    name: str
+
+@router.put("/profile/name")
+def update_profile_name(request: UpdateNameRequest):
+    success = update_user_name(request.user_id, request.name)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to update name")
+    return {"message": "Name updated successfully"}
 
 @router.post("/register-doctor")
 async def register_doctor(
