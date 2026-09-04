@@ -26,44 +26,109 @@ interface SessionHistoryTabProps {
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
+const getIllnessFinding = (status: string, mode?: string) => {
+  const s = (status || '').toLowerCase();
+  if (s.includes('parkinson')) {
+    return {
+      label: "Parkinson's Disease (Resting Tremor)",
+      severity: 'severe',
+      category: 'Neurological Syndrome',
+      description: 'Resting tremor oscillations (4-6 Hz) and involuntary motor instability detected, matching Parkinsonian motor signatures.'
+    };
+  }
+  if (s.includes('essential tremor') || s.includes('action tremor') || s.includes('tremor')) {
+    return {
+      label: 'Essential Tremor (Action Tremor)',
+      severity: 'moderate',
+      category: 'Neurological Syndrome',
+      description: 'High-frequency tremor oscillations detected during movement and sustained posture holding.'
+    };
+  }
+  if (s.includes('stroke') || s.includes('hemiplegia')) {
+    return {
+      label: 'Stroke / Hemiplegia Syndrome',
+      severity: 'severe',
+      category: 'Neurological / Motor Asymmetry',
+      description: 'Significant unilateral asymmetry and movement lag detected between left and right sides.'
+    };
+  }
+  if (s.includes('scoliosis')) {
+    return {
+      label: 'Scoliosis (Spinal Curvature)',
+      severity: 'moderate',
+      category: 'Musculoskeletal',
+      description: 'Lateral spinal curvature and uneven shoulder/pelvic height detected.'
+    };
+  }
+  if (s.includes('kyphosis')) {
+    return {
+      label: 'Postural Kyphosis (Hunchback)',
+      severity: 'moderate',
+      category: 'Musculoskeletal',
+      description: 'Excessive thoracic curvature and forward rounded shoulder posture detected.'
+    };
+  }
+  if (s.includes('text neck')) {
+    return {
+      label: 'Text Neck Syndrome',
+      severity: 'mild',
+      category: 'Cervical Spine',
+      description: 'Significant anterior head translation and downward cervical spine angle detected.'
+    };
+  }
+  if (s.includes('cerebral palsy') || s.includes('spasticity')) {
+    return {
+      label: 'Cerebral Palsy / Spasticity Indicators',
+      severity: 'severe',
+      category: 'Motor Coordination',
+      description: 'Irregular asymmetric joint movement patterns detected across multiple limbs.'
+    };
+  }
+  return {
+    label: 'Normal Movement & Posture',
+    severity: 'normal',
+    category: 'General Health',
+    description: 'No pathological tremor, postural deviation, or gait asymmetry detected. All parameters fall within healthy clinical ranges.'
+  };
+};
+
 const getDerivedScore = (record: any) => {
-  // 1. If we have the full frontend report saved, use the EXACT score from the live detection!
+  // 1. Direct per-frame score saved in database metrics_json (authentic per-frame score saved in SQLite)
+  if (record.metrics_json) {
+    try {
+      const m = typeof record.metrics_json === 'string' ? JSON.parse(record.metrics_json) : record.metrics_json;
+      if (m && m.final_score !== undefined && m.final_score !== null) {
+        return Number(m.final_score);
+      }
+    } catch (e) { }
+  }
+
+  // 2. Report JSON score
   if (record.report_json) {
     try {
       const report = typeof record.report_json === 'string' ? JSON.parse(record.report_json) : record.report_json;
-      if (report.score !== undefined) {
-        return report.score;
+      if (report && report.score !== undefined && report.score !== null) {
+        return Number(report.score);
       }
     } catch (e) {
       console.error("Error parsing report_json in history:", e);
     }
   }
 
-  // 2. For newer backend records without a full frontend report, use metrics_json
-  if (record.metrics_json && record.metrics_json.final_score !== undefined) {
-    return record.metrics_json.final_score;
-  }
-
-  // 2. Fallback for ALL older records (restoring the user's original preferred behavior!)
+  // 3. Fallback for older records with metric_1 and metric_2
   if (record.metric_1 && record.metric_2) {
-    if (record.mode?.toLowerCase().includes('posture')) {
-      const neckAngle = record.metric_1.value / 1.8;
-      const shoulderDiff = record.metric_2.value / 1.5;
+    if (record.mode?.toLowerCase().includes('posture') || record.mode?.toLowerCase() === 'full') {
+      const neckAngle = Number(record.metric_1.value) / 1.8;
+      const shoulderDiff = Number(record.metric_2.value) / 1.5;
       return Math.max(0, 100 - (neckAngle * 1.5) - (shoulderDiff * 4.0));
     }
     if (record.mode?.toLowerCase().includes('tremor')) {
-      const amp = record.metric_2.value;
+      const amp = Number(record.metric_2.value);
       const tremorProb = amp / 6.5;
       return Math.max(0, 100 - (tremorProb * 80.0));
     }
-    if (record.mode?.toLowerCase().includes('gait') || record.mode?.toLowerCase().includes('exercise')) {
-      return record.metric_1.value;
-    }
-    if (record.mode?.toLowerCase() === 'full') {
-      // In old records, the history ONLY showed the posture score.
-      const neckAngle = record.metric_1.value / 1.8;
-      const shoulderDiff = record.metric_2.value / 1.5;
-      return Math.max(0, 100 - (neckAngle * 1.5) - (shoulderDiff * 4.0));
+    if (record.mode?.toLowerCase().includes('gait') || record.mode?.toLowerCase() === 'exercise') {
+      return Number(record.metric_1.value);
     }
   }
 
@@ -229,13 +294,16 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[], isDarkMode:
         const d = new Date(r.timestamp * 1000);
         const localDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-        let reportStatus = r.status || 'Pending';
+        let reportStatus = r.status || 'Normal';
         let reportRec = r.recommendation || '';
 
         if (r.report_json) {
           try {
             const report = typeof r.report_json === 'string' ? JSON.parse(r.report_json) : r.report_json;
-            if (report.status) reportStatus = report.status;
+            // Retain actual illness syndrome diagnosis from r.status unless it's only generic
+            if (!r.status || ['normal', 'optimal', 'pending'].includes(r.status.toLowerCase())) {
+              if (report.status) reportStatus = report.status;
+            }
             if (report.recommendation) reportRec = report.recommendation;
           } catch (e) { }
         }
@@ -308,26 +376,55 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[], isDarkMode:
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Rich Final Session Result Dashboard */}
-      {finalSession && finalSession.raw.report_json && (
-        <PostureResultsCard
-          report={finalSession.raw.report_json}
-          analysisResult={{
-            mode: finalSession.raw.mode,
-            status: finalSession.raw.status,
-            score: finalSession.score,
-            recommendation: finalSession.raw.recommendation,
-            metrics: finalSession.raw.metrics_json || {
-              [finalSession.raw.metric_1?.name || 'm1']: finalSession.raw.metric_1?.value || 0,
-              [finalSession.raw.metric_2?.name || 'm2']: finalSession.raw.metric_2?.value || 0
-            },
-            landmarks: [],
-            timestamp: finalSession.raw.timestamp
-          } as any}
-          isDarkMode={isDarkMode}
-          dbHistory={dbHistory as any}
-          hideNewScreeningButton={true}
-        />
-      )}
+      {finalSession && finalSession.raw.report_json && (() => {
+        let parsedReport = typeof finalSession.raw.report_json === 'string'
+          ? JSON.parse(finalSession.raw.report_json)
+          : { ...finalSession.raw.report_json };
+
+        const illness = getIllnessFinding(finalSession.raw.status || finalSession.status, finalSession.raw.mode);
+        const existingFindings = parsedReport.findings || [];
+        const hasIllness = existingFindings.some((f: any) =>
+          f.label.toLowerCase().includes(illness.label.toLowerCase()) ||
+          illness.label.toLowerCase().includes(f.label.toLowerCase())
+        );
+
+        if (!hasIllness) {
+          parsedReport = {
+            ...parsedReport,
+            findings: [
+              {
+                id: 'illness-diagnosis',
+                severity: illness.severity,
+                label: illness.label,
+                affectedArea: illness.category,
+                description: illness.description,
+              },
+              ...existingFindings.filter((f: any) => f.id !== 'normal-posture' || illness.severity === 'normal'),
+            ],
+          };
+        }
+
+        return (
+          <PostureResultsCard
+            report={parsedReport}
+            analysisResult={{
+              mode: finalSession.raw.mode,
+              status: finalSession.raw.status,
+              score: finalSession.score,
+              recommendation: finalSession.raw.recommendation,
+              metrics: finalSession.raw.metrics_json || {
+                [finalSession.raw.metric_1?.name || 'm1']: finalSession.raw.metric_1?.value || 0,
+                [finalSession.raw.metric_2?.name || 'm2']: finalSession.raw.metric_2?.value || 0
+              },
+              landmarks: [],
+              timestamp: finalSession.raw.timestamp
+            } as any}
+            isDarkMode={isDarkMode}
+            dbHistory={dbHistory as any}
+            hideNewScreeningButton={true}
+          />
+        );
+      })()}
 
       {finalSession && !finalSession.raw.report_json && (
         <div style={{ ...cardStyle, background: 'linear-gradient(180deg, rgba(15, 23, 42, 1) 0%, rgba(30, 41, 59, 1) 100%)', border: '1px solid rgba(255,255,255,0.05)', padding: 0, overflow: 'hidden' }}>
@@ -390,6 +487,19 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[], isDarkMode:
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {/* Primary Diagnosed Illness Syndrome */}
+                {(() => {
+                  const illness = getIllnessFinding(finalSession.raw.status || finalSession.status, finalSession.raw.mode);
+                  return (
+                    <FindingCard
+                      label={illness.label}
+                      severity={illness.severity}
+                      category={illness.category}
+                      description={illness.description}
+                    />
+                  );
+                })()}
+
                 {finalSession.raw.metrics_json ? (
                   Object.entries(finalSession.raw.metrics_json).map(([k, v]) => (
                     <FindingCard
@@ -650,23 +760,53 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[], isDarkMode:
               </div>
             )}
 
-            {/* AI Diagnosis Findings (if report_json exists) */}
-            {activeSession.raw.report_json && activeSession.raw.report_json.findings && activeSession.raw.report_json.findings.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 12 }}>AI Findings & Analysis</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {activeSession.raw.report_json.findings.map((f: any, i: number) => (
-                    <FindingCard
-                      key={i}
-                      label={f.label}
-                      severity={f.severity}
-                      category={f.affectedArea || 'General'}
-                      description={f.description}
-                    />
-                  ))}
+            {/* AI Diagnosis Findings */}
+            {(() => {
+              const illness = getIllnessFinding(activeSession.raw.status || activeSession.status, activeSession.raw.mode);
+              const existingFindings = (activeSession.raw.report_json?.findings || []);
+              const hasIllness = existingFindings.some((f: any) =>
+                f.label.toLowerCase().includes(illness.label.toLowerCase()) ||
+                illness.label.toLowerCase().includes(f.label.toLowerCase())
+              );
+
+              const allFindings = hasIllness
+                ? existingFindings
+                : [
+                  {
+                    label: illness.label,
+                    severity: illness.severity,
+                    affectedArea: illness.category,
+                    description: illness.description,
+                  },
+                  ...existingFindings.filter((f: any) => f.id !== 'normal-posture' || illness.severity === 'normal'),
+                ];
+
+              if (allFindings.length === 0) {
+                allFindings.push({
+                  label: illness.label,
+                  severity: illness.severity,
+                  affectedArea: illness.category,
+                  description: illness.description,
+                });
+              }
+
+              return (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 12 }}>AI Findings & Analysis</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {allFindings.map((f: any, i: number) => (
+                      <FindingCard
+                        key={i}
+                        label={f.label}
+                        severity={f.severity}
+                        category={f.affectedArea || 'General'}
+                        description={f.description}
+                      />
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {activeSession.raw.report_json && activeSession.raw.report_json.conditions && activeSession.raw.report_json.conditions.length > 0 && (
               <div style={{ marginTop: 16 }}>
@@ -765,6 +905,13 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({ dbHistory,
     });
 
     return Object.entries(groups).map(([groupId, group]) => {
+      // Find if ANY record in this group has the rich report_json
+      const reportRecord = group.find(r => r.report_json);
+      if (reportRecord) {
+        // Propagate the report_json to ALL records in this group to fix the trailing frame race condition
+        group.forEach(r => r.report_json = reportRecord.report_json);
+      }
+
       // Use the first record's timestamp for the capture date
       const timestamp = group[0].timestamp;
       const date = new Date(timestamp * 1000);

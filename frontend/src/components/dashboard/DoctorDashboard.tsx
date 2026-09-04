@@ -1,18 +1,42 @@
-import React, { useEffect, useState } from 'react';
-import { Layout, Row, Col, Card, Input, Avatar, Typography, Button, Progress, Tag, Space, Divider, message, Empty, Tabs, Modal, Form, DatePicker, TimePicker, Badge, Upload } from 'antd';
-import { 
-  UserOutlined, SearchOutlined, LogoutOutlined, 
-  FilePdfOutlined, HistoryOutlined, LineChartOutlined, VideoCameraOutlined, 
+import React, { useEffect, useState, useRef } from 'react';
+import { Layout, Row, Col, Card, Input, Avatar, Typography, Button, Progress, Tag, Space, Divider, message, Empty, Tabs, Modal, Form, DatePicker, TimePicker, Badge, Upload, List, Checkbox, Popover, notification } from 'antd';
+import {
+  UserOutlined, SearchOutlined, LogoutOutlined,
+  FilePdfOutlined, HistoryOutlined, LineChartOutlined, VideoCameraOutlined,
   CheckCircleOutlined, HeartOutlined, SettingOutlined, EyeOutlined,
-  ShareAltOutlined, FileTextOutlined, BellOutlined
+  ShareAltOutlined, FileTextOutlined, BellOutlined, ArrowLeftOutlined,
+  ClockCircleOutlined, InfoCircleOutlined, EditOutlined, CalendarOutlined,
+  CloseCircleFilled, AppstoreOutlined
 } from '@ant-design/icons';
 import { User, DBHistoryRecord, AnalysisResult, Appointment } from '../../types';
 import { downloadPDFReport } from '../../utils/pdfGenerator';
 import { DoctorPatientChat } from './DoctorPatientChat';
-// dayjs unused
+import dayjs from 'dayjs';
+import isBetween from 'dayjs/plugin/isBetween';
+dayjs.extend(isBetween);
+import { DailyTimeline } from './DailyTimeline';
 import * as doctorApi from '../../api/doctor.api';
+
+
 import * as chatApi from '../../api/chat.api';
 import * as sharedApi from '../../api/shared.api';
+import { SessionHistoryTab } from '../SessionHistoryTab';
+import { LearnAndFaqTab } from './LearnAndFaqTab';
+import { useAssessmentData } from '../../hooks/useAssessmentData';
+import { LiveDetectionPanel } from '../LiveDetectionPanel';
+import { ScreenState } from '../../types';
+
+import { DoctorScheduleTab } from './DoctorScheduleTab';
+
+const DAYS_OF_WEEK = [
+  { label: 'Sunday', value: 0 },
+  { label: 'Monday', value: 1 },
+  { label: 'Tuesday', value: 2 },
+  { label: 'Wednesday', value: 3 },
+  { label: 'Thursday', value: 4 },
+  { label: 'Friday', value: 5 },
+  { label: 'Saturday', value: 6 }
+];
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -38,35 +62,130 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [patientHistory, setPatientHistory] = useState<DBHistoryRecord[]>([]);
+  const [activeNav, setActiveNavState] = useState<string>(() => {
+    return sessionStorage.getItem('doctor_dashboard_nav') || 'patients';
+  });
+
+  const setActiveNav = (nav: string) => {
+    sessionStorage.setItem('doctor_dashboard_nav', nav);
+    setActiveNavState(nav);
+  };
   const [activeTab, setActiveTab] = useState<string>('current');
-  const [activePatientView, setActivePatientView] = useState<'clinical' | 'chat'>('clinical');
+
+  const [screenState, setScreenState] = useState<ScreenState>('IDLE');
+  const [activeMode, setActiveMode] = useState<'posture' | 'tremor' | 'gait' | 'full'>('full');
+
+  const {
+    backendConnected,
+    analysisResult,
+    setAnalysisResult,
+    diagnosisReport,
+    setDiagnosisReport,
+    dbHistory: doctorDbHistory,
+    uploading,
+    fetchHistory: fetchDoctorHistory
+  } = useAssessmentData(currentUser, activeMode, setScreenState);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isOverrideModalOpen, setIsOverrideModalOpen] = useState(false);
+  const [localName, setLocalName] = useState(currentUser.name);
+  const [localBio, setLocalBio] = useState((currentUser as any).bio || '');
+  const [localClinic, setLocalClinic] = useState((currentUser as any).clinic_name || '');
+  const [localHours, setLocalHours] = useState((currentUser as any).consultation_hours || '');
+  const [avatarKey, setAvatarKey] = useState(Date.now());
   const [settingsForm] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
-  
-  const [isAppointmentsModalOpen, setIsAppointmentsModalOpen] = useState(false);
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
+
+  const handleProfessionalUpdate = async (field: 'bio' | 'clinic_name' | 'consultation_hours', val: string) => {
+    try {
+      const payload = {
+        email: currentUser.email,
+        bio: field === 'bio' ? val : localBio,
+        clinic_name: field === 'clinic_name' ? val : localClinic,
+        consultation_hours: field === 'consultation_hours' ? val : localHours
+      };
+      await doctorApi.updateDoctorProfile(payload);
+      message.success("Profile updated successfully!");
+      if (field === 'bio') setLocalBio(val);
+      if (field === 'clinic_name') setLocalClinic(val);
+      if (field === 'consultation_hours') setLocalHours(val);
+    } catch (e: any) {
+      message.error("Failed to update profile");
+    }
+  };
+
+
   const [unreadCounts, setUnreadCounts] = useState<Record<number, number>>({});
-  
-  const [isOverrideModalOpen, setIsOverrideModalOpen] = useState(false);
+
   const [isNotificationsModalOpen, setIsNotificationsModalOpen] = useState(false);
   const [notifications, setNotifications] = useState<any[]>([]);
-  const [overrides, setOverrides] = useState<any[]>([]);
-  const [overrideForm] = Form.useForm();
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [selectedChatPatient, setSelectedChatPatient] = useState<any>(null);
+
+  const [isTodayAgendaOpen, setIsTodayAgendaOpen] = useState(false);
+  const [agendaAppointments, setAgendaAppointments] = useState<any[]>([]);
+  const [agendaSchedule, setAgendaSchedule] = useState<any[]>([]);
+  const [agendaOverrides, setAgendaOverrides] = useState<any[]>([]);
+  const [calSelectedDate, setCalSelectedDate] = useState<dayjs.Dayjs>(dayjs());
 
   const fetchDashboardData = async () => {
     try {
       const notifs = await sharedApi.getNotifications(currentUser.email);
       setNotifications(notifs);
 
-      const overridesData = await doctorApi.getScheduleOverrides(currentUser.email);
-      setOverrides(overridesData);
+      // Fetch schedule for today's agenda
+      const appts = await doctorApi.getDoctorAppointments(currentUser.email);
+      const sched = await doctorApi.getDoctorSchedule(currentUser.email);
+      const ovrs = await doctorApi.getScheduleOverrides(currentUser.email);
+      setAgendaAppointments(appts);
+      setAgendaSchedule(sched);
+      setAgendaOverrides(ovrs);
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const getCurrentAndNextEvents = () => {
+    const todayStr = dayjs().format('YYYY-MM-DD');
+    const now = dayjs();
+    let allEvents: any[] = [];
+    
+    agendaAppointments.forEach(appt => {
+      if (appt.appointment_date === todayStr && appt.status !== 'CANCELLED') {
+        allEvents.push({
+          type: 'appointment',
+          title: `Appt: ${appt.patient_name || appt.patient_email}`,
+          start: dayjs(`${todayStr} ${appt.start_time}`),
+          end: dayjs(`${todayStr} ${appt.end_time}`)
+        });
+      }
+    });
+    
+    agendaOverrides.forEach(ovr => {
+      if (ovr.date === todayStr) {
+        allEvents.push({
+          type: 'override',
+          title: ovr.reason || 'Blocked',
+          start: dayjs(`${todayStr} ${ovr.start_time}`),
+          end: dayjs(`${todayStr} ${ovr.end_time}`)
+        });
+      }
+    });
+    
+    allEvents.sort((a, b) => a.start.valueOf() - b.start.valueOf());
+    
+    let currentEvent = null;
+    let nextEvent = null;
+    
+    for (const ev of allEvents) {
+      if (now.isBetween(ev.start, ev.end, null, '[)')) {
+        currentEvent = ev;
+      } else if (ev.start.isAfter(now) && !nextEvent) {
+        nextEvent = ev;
+      }
+    }
+    
+    return { currentEvent, nextEvent };
   };
 
   const fetchUnreadCounts = async () => {
@@ -78,55 +197,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
     }
   };
 
-  const handleAddOverride = async (values: any) => {
-    try {
-      await doctorApi.addScheduleOverride({
-        email: currentUser.email,
-        date: values.date.format('YYYY-MM-DD'),
-        start_time: values.timeRange[0].format('HH:mm'),
-        end_time: values.timeRange[1].format('HH:mm'),
-        reason: values.reason || ''
-      });
-      message.success('Time off added');
-      overrideForm.resetFields();
-      setIsOverrideModalOpen(false);
-      fetchDashboardData();
-    } catch (e: any) {
-      message.error(e.message || 'Failed to add time off');
-    }
-  };
 
-  const handleDeleteOverride = async (id: number) => {
-    try {
-      await doctorApi.deleteScheduleOverride(currentUser.email, id);
-      message.success('Time off deleted');
-      fetchDashboardData();
-    } catch (e: any) {
-      message.error(e.message || 'Failed to delete time off');
-    }
-  };
-
-  const fetchAppointments = async () => {
-    try {
-      const data = await doctorApi.getDoctorAppointments(currentUser.email);
-      setAppointments(data);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const handleUpdateAppointment = async (id: number, status: string) => {
-    try {
-      await doctorApi.updateAppointmentStatus({
-        appointment_id: id,
-        status: status
-      });
-      message.success(`Appointment ${status}`);
-      fetchAppointments();
-    } catch (e: any) {
-      message.error(e.message || "Failed to update appointment");
-    }
-  };
 
   const handleSaveSettings = async (values: any) => {
     try {
@@ -136,6 +207,22 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
         clinic_name: values.clinic_name || '',
         consultation_hours: values.consultation_hours || ''
       });
+      
+      setLocalBio(values.bio || '');
+      setLocalClinic(values.clinic_name || '');
+      setLocalHours(values.consultation_hours || '');
+
+      const savedUser = localStorage.getItem('user');
+      if (savedUser) {
+        try {
+          const parsed = JSON.parse(savedUser);
+          parsed.bio = values.bio || '';
+          parsed.clinic_name = values.clinic_name || '';
+          parsed.consultation_hours = values.consultation_hours || '';
+          localStorage.setItem('user', JSON.stringify(parsed));
+        } catch(e) {}
+      }
+
       message.success("Profile updated successfully");
       setIsSettingsModalOpen(false);
     } catch (e: any) {
@@ -156,6 +243,20 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
     }
   };
 
+  useEffect(() => {
+    if (currentUser) {
+      setLocalName(currentUser.name);
+      setLocalBio((currentUser as any).bio || '');
+      setLocalClinic((currentUser as any).clinic_name || '');
+      setLocalHours((currentUser as any).consultation_hours || '');
+      settingsForm.setFieldsValue({
+        bio: (currentUser as any).bio || '',
+        clinic_name: (currentUser as any).clinic_name || '',
+        consultation_hours: (currentUser as any).consultation_hours || ''
+      });
+    }
+  }, [currentUser, settingsForm]);
+
   const fetchPatientHistory = async (patientEmail: string) => {
     try {
       setHistoryLoading(true);
@@ -171,11 +272,62 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
   };
 
   useEffect(() => {
+    fetchDashboardData();
     fetchPatients();
     fetchUnreadCounts();
-    const interval = setInterval(fetchUnreadCounts, 5000);
+    const interval = setInterval(() => {
+      fetchPatients();
+      fetchUnreadCounts();
+    }, 5000); // Poll every 5s
     return () => clearInterval(interval);
-  }, []);
+  }, [currentUser.email]);
+
+  // 30-minute reminder: check every minute if next event starts within 30 min
+  const notifiedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const checkReminder = () => {
+      const todayStr = dayjs().format('YYYY-MM-DD');
+      const now = dayjs();
+      const allEvents: { key: string; title: string; start: dayjs.Dayjs }[] = [];
+
+      agendaAppointments.forEach(appt => {
+        if (appt.appointment_date === todayStr && appt.status !== 'CANCELLED') {
+          allEvents.push({
+            key: `appt-${appt.id || appt.start_time}`,
+            title: `Appointment: ${appt.patient_name || appt.patient_email}`,
+            start: dayjs(`${todayStr} ${appt.start_time}`)
+          });
+        }
+      });
+      agendaOverrides.forEach(ovr => {
+        if (ovr.date === todayStr) {
+          allEvents.push({
+            key: `blk-${ovr.id || ovr.start_time}`,
+            title: `${ovr.reason || 'Blocked'} (Blocked)`,
+            start: dayjs(`${todayStr} ${ovr.start_time}`)
+          });
+        }
+      });
+
+      allEvents.forEach(ev => {
+        const minutesUntil = ev.start.diff(now, 'minute');
+        if (minutesUntil > 0 && minutesUntil <= 30 && !notifiedRef.current.has(ev.key)) {
+          notifiedRef.current.add(ev.key);
+          notification.info({
+            message: 'Upcoming Activity',
+            description: `"${ev.title}" starts at ${ev.start.format('HH:mm')} (in ${minutesUntil} min)`,
+            placement: 'topRight',
+            duration: 8,
+            icon: <CalendarOutlined style={{ color: '#1677ff' }} />
+          });
+        }
+      });
+    };
+
+    checkReminder(); // Run immediately
+    const reminderInterval = setInterval(checkReminder, 60000); // Every minute
+    return () => clearInterval(reminderInterval);
+  }, [agendaAppointments, agendaOverrides]);
 
   // handleChatOpen removed
 
@@ -192,7 +344,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
 
   const handleExportPDF = () => {
     if (!selectedPatient || patientHistory.length === 0) return;
-    
+
     const latestRecord = patientHistory[0];
     const mockAnalysisResult: AnalysisResult = {
       mode: latestRecord.mode,
@@ -211,10 +363,17 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
     message.success(`PDF report exported for ${selectedPatient.name}`);
   };
 
-  const filteredPatients = patients.filter(p => 
-    p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.email.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredPatients = patients
+    .filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()) || p.email.toLowerCase().includes(searchQuery.toLowerCase()))
+    .sort((a, b) => {
+      // Sort patients with unread messages first
+      const unreadA = unreadCounts[a.id] || 0;
+      const unreadB = unreadCounts[b.id] || 0;
+      if (unreadA !== unreadB) {
+        return unreadB - unreadA;
+      }
+      return 0; // Otherwise maintain normal order
+    });
 
   const latestRecord = patientHistory.length > 0 ? patientHistory[0] : null;
 
@@ -225,7 +384,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
 
   return (
     <Layout className={`min-h-screen ${isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-800'}`}>
-      
+
       {/* Top Header */}
       <Header className={`px-6 flex justify-between items-center border-b ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'} h-16`}>
         <Space size="middle" className="align-middle">
@@ -243,47 +402,63 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
         </Space>
 
         <Space size="large" className="align-middle">
-          <Badge count={notifications.filter(n => !n.is_read).length} size="small">
-            <Button 
-              type="text" 
-              icon={<BellOutlined className="text-slate-400" />} 
-              onClick={() => {
-                fetchDashboardData();
-                setIsNotificationsModalOpen(true);
-              }}
-            />
-          </Badge>
-          <Button 
-            type="text" 
-            icon={<SettingOutlined className="text-slate-400" />} 
-            onClick={() => {
-              fetchDashboardData();
-              setIsSettingsModalOpen(true);
-            }} 
-          />
-          <Button 
-            type="text" 
-            icon={<FileTextOutlined className="text-slate-400" />} 
-            onClick={() => {
-              fetchAppointments();
-              setIsAppointmentsModalOpen(true);
-            }} 
-          />
-
+          <Space size="small" className="mr-2">
+            <Popover 
+              placement="bottomRight"
+              title="Today's Status"
+              content={(() => {
+                const { currentEvent, nextEvent } = getCurrentAndNextEvents();
+                return (
+                  <div className="w-56 space-y-3">
+                    <div>
+                      <Text className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-1">Now</Text>
+                      {currentEvent ? (
+                        <div className="bg-blue-50 dark:bg-blue-900/30 p-2 rounded border border-blue-100 dark:border-blue-800">
+                          <Text className="font-semibold text-blue-700 dark:text-blue-300 block">{currentEvent.title}</Text>
+                          <Text className="text-xs text-blue-600 dark:text-blue-400">Until {currentEvent.end.format('HH:mm')}</Text>
+                        </div>
+                      ) : (
+                        <Text className="text-slate-400 italic">No active events</Text>
+                      )}
+                    </div>
+                    <div>
+                      <Text className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-1">Next</Text>
+                      {nextEvent ? (
+                        <div className="bg-slate-50 dark:bg-slate-800 p-2 rounded border border-slate-200 dark:border-slate-700">
+                          <Text className="font-semibold block">{nextEvent.title}</Text>
+                          <Text className="text-xs text-slate-500">Starts at {nextEvent.start.format('HH:mm')}</Text>
+                        </div>
+                      ) : (
+                        <Text className="text-slate-400 italic">No upcoming events today</Text>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            >
+              <Badge count={agendaAppointments.filter(a => a.appointment_date === dayjs().format('YYYY-MM-DD') && a.status !== 'CANCELLED').length} size="small">
+                <Button 
+                  type="text" 
+                  icon={<CalendarOutlined className="text-slate-500" />} 
+                  onClick={() => setIsTodayAgendaOpen(true)}
+                />
+              </Badge>
+            </Popover>
+          </Space>
           <Divider type="vertical" className={isDarkMode ? 'border-slate-800' : 'border-slate-200'} />
           <Space className="cursor-pointer hover:bg-slate-100 p-2 rounded-lg transition-colors dark:hover:bg-slate-800" onClick={() => setIsSettingsModalOpen(true)}>
-            <Avatar src={`http://localhost:8000/api/profile/picture/${currentUser.id}`} className="bg-blue-100 text-blue-600 font-bold">
-              {getInitials(currentUser.name)}
+            <Avatar src={`http://localhost:8000/api/profile/picture/${currentUser.id}?t=${avatarKey}`} className="bg-blue-100 text-blue-600 font-bold">
+              {getInitials(localName)}
             </Avatar>
-            <div className="text-left hidden sm:block">
-              <Text style={{ display: 'block' }} className="text-xs font-semibold leading-none">{currentUser.name}</Text>
-              <Text className="text-[10px] text-slate-400 leading-none">{currentUser.specialization || "Clinician"}</Text>
+            <div className="text-left hidden sm:flex sm:flex-col sm:justify-center">
+              <Text style={{ display: 'block' }} className="text-xs font-semibold leading-tight">{localName}</Text>
+              <Text className="text-[10px] text-slate-400 leading-tight">{currentUser.specialization || "Clinician"}</Text>
             </div>
           </Space>
-          <Button 
-            type="text" 
-            danger 
-            icon={<LogoutOutlined />} 
+          <Button
+            type="text"
+            danger
+            icon={<LogoutOutlined />}
             onClick={handleLogout}
             className="hover:bg-red-500/10 text-xs font-semibold"
           >
@@ -294,568 +469,595 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
 
       <Layout>
         {/* Left Sidebar Menu & Patient Directory */}
-        <Sider 
-          width={240} 
-          theme={isDarkMode ? 'dark' : 'light'} 
+        <Sider
+          width={240}
+          theme={isDarkMode ? 'dark' : 'light'}
           className={`border-r ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}
         >
           <div className="flex flex-col h-full justify-between py-4">
             <div className="space-y-6">
               {/* Navigation Menu */}
               <div className="px-3 space-y-1">
-                <Button type="text" block className="text-left flex items-center gap-3 px-3 py-5 text-slate-400 hover:text-blue-600">
-                  <VideoCameraOutlined /> <span className="font-semibold text-sm">Live Detection</span>
-                </Button>
-                <Button type="text" block className="text-left flex items-center gap-3 px-3 py-5 text-blue-600 bg-blue-50/50 hover:text-blue-600">
-                  <UserOutlined /> <span className="font-semibold text-sm">Patients</span>
-                </Button>
-                <Button type="text" block className="text-left flex items-center gap-3 px-3 py-5 text-slate-400 hover:text-blue-600">
-                  <LineChartOutlined /> <span className="font-semibold text-sm">Analytics</span>
-                </Button>
-                <Button type="text" block className="text-left flex items-center gap-3 px-3 py-5 text-slate-400 hover:text-blue-600">
-                  <FileTextOutlined /> <span className="font-semibold text-sm">Reports</span>
-                </Button>
-                <Button type="text" block className="text-left flex items-center gap-3 px-3 py-5 text-slate-400 hover:text-blue-600">
-                  <HistoryOutlined /> <span className="font-semibold text-sm">History</span>
+                {[
+                  { key: 'screening', icon: <VideoCameraOutlined />, label: 'Live Detection' },
+                  { key: 'history', icon: <HistoryOutlined />, label: 'History' },
+                  { key: 'calendar', icon: <AppstoreOutlined />, label: 'Calendar' },
+                  { key: 'patients', icon: <UserOutlined />, label: 'Patients', badge: Object.values(unreadCounts).reduce((a, b) => a + b, 0) },
+                  { key: 'learn', icon: <FileTextOutlined />, label: 'Learn & FAQs' },
+                ].map(item => (
+                  <Button
+                    key={item.key}
+                    type="text"
+                    block
+                    onClick={() => setActiveNav(item.key)}
+                    className={`flex items-center justify-center gap-3 px-3 py-5 rounded-xl transition-all ${
+                      activeNav === item.key
+                        ? 'text-blue-600 bg-blue-50/50 font-semibold'
+                        : isDarkMode
+                        ? 'text-slate-400 hover:text-blue-400 hover:bg-slate-800'
+                        : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50/30'
+                    }`}
+                  >
+                    <span className="flex items-center justify-center gap-2">
+                      {item.icon}
+                      <span className="font-semibold text-sm">{item.label}</span>
+                      {(item.badge ?? 0) > 0 && <Badge count={item.badge} />}
+                    </span>
+                  </Button>
+                ))}
+              </div>
+
+              <div className="px-3 mt-2 space-y-1">
+                <div className="px-3 py-1">
+                  <Text className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Scheduling</Text>
+                </div>
+                <Button 
+                  type="text" 
+                  block 
+                  onClick={() => setActiveNav('schedule')}
+                  className={`flex items-center justify-center gap-3 px-3 py-5 rounded-xl transition-all ${
+                    activeNav === 'schedule' ? 'text-blue-600 bg-blue-50/50 font-semibold' : isDarkMode ? 'text-slate-400 hover:text-blue-400 hover:bg-slate-800' : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50/30'
+                  }`}
+                >
+                  <span className="flex items-center justify-center gap-2">
+                    <CalendarOutlined /> <span className="font-semibold text-sm">Schedule & Bookings</span>
+                  </span>
                 </Button>
               </div>
 
               <Divider className="my-0" />
-
-              {/* Active Patients Directory */}
-              <div className="px-4">
-                <Text className="text-xs font-bold text-slate-400 block mb-3 uppercase tracking-wider">Active Patients</Text>
-                <Input
-                  prefix={<SearchOutlined className="text-slate-400" />}
-                  placeholder="Search patients..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="mb-3 bg-slate-50 border-slate-200"
-                  size="small"
-                />
-                
-                <div className="space-y-1 max-h-[calc(100vh-420px)] overflow-y-auto">
-                  {filteredPatients.map((patient) => {
-                    const isSelected = selectedPatient?.id === patient.id;
-                    const unread = unreadCounts[patient.id] || 0;
-                    return (
-                      <div
-                        key={patient.id}
-                        onClick={() => handleSelectPatient(patient)}
-                        className={`flex items-center justify-between px-3 py-2 rounded-xl cursor-pointer transition-all ${
-                          isSelected 
-                            ? 'bg-blue-50 text-blue-600 font-semibold' 
-                            : 'text-slate-600 hover:bg-slate-50'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <UserOutlined className="text-xs" />
-                          <span className="text-xs truncate">{patient.name}</span>
-                        </div>
-                        {unread > 0 && (
-                          <Badge count={unread} size="small" />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
             </div>
           </div>
         </Sider>
 
         {/* Main Content Area */}
         <div className="flex flex-col flex-1 h-[calc(100vh-64px)] min-w-0">
-          {selectedPatient ? (
-            <>
-              {/* Fixed Doctor Profile Bar */}
-              <div className="px-6 pt-6 pb-2 z-10 shrink-0">
-                <div className="max-w-7xl mx-auto w-full">
-                  <Card className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}>
-                    <Row justify="space-between" align="middle" gutter={[16, 16]}>
-                      <Col>
-                        <Space size="middle">
-                          <Avatar size={48} className="bg-blue-100 text-blue-600 font-bold text-lg">
-                            {getInitials(currentUser.name)}
-                          </Avatar>
-                          <div>
-                            <Title level={4} className="m-0 font-bold">Dr. {currentUser.name}</Title>
-                            <Space split={<Divider type="vertical" />} className="text-xs text-slate-400">
-                              <span>License: {currentUser.medical_license || 'Pending'}</span>
-                              <span>Specialization: {currentUser.specialization || 'General Practitioner'}</span>
-                              <span>Clinic: {currentUser.clinic_name || 'Not assigned'}</span>
-                            </Space>
-                          </div>
+          
+          {/* Fixed Doctor Profile Bar (Always Visible) */}
+          <div className="px-6 pt-6 pb-2 z-10 shrink-0">
+            <div className="max-w-7xl mx-auto w-full">
+              <Card 
+                className={`border shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}
+                bodyStyle={{ padding: '16px 24px' }}
+              >
+                <Row justify="space-between" align="middle" gutter={[16, 16]}>
+                  <Col>
+                    <Space size="middle" align="start">
+                      <Avatar size={40} src={`http://localhost:8000/api/profile/picture/${currentUser.id}?t=${avatarKey}`} className="bg-blue-100 text-blue-600 font-bold text-base mt-0.5">
+                        {getInitials(localName)}
+                      </Avatar>
+                      <div className="flex flex-col justify-start">
+                        <Title level={5} className={`m-0 font-bold ${isDarkMode ? 'text-white' : ''}`}>Dr. {localName}</Title>
+                        <Space split={<Divider type="vertical" className={isDarkMode ? 'border-slate-700' : ''} />} className="text-[11px] text-slate-400 mt-0.5" wrap>
+                          <span>License: {currentUser.medical_license || 'Approved'}</span>
+                          <span>Specialization: {currentUser.specialization || 'General Practitioner'}</span>
+                          <span>Clinic: {localClinic || 'Not assigned'}</span>
                         </Space>
-                      </Col>
-                      <Col>
-                        <Space>
-                          <Tag color="success" icon={<CheckCircleOutlined />} className="px-3 py-1 rounded-full border-0 font-semibold">
-                            Available for Consult
-                          </Tag>
-                          <Tag color="blue" className="px-3 py-1 rounded-full border-0 font-semibold uppercase">
-                            Pro Mode
-                          </Tag>
-                        </Space>
-                      </Col>
-                    </Row>
-                  </Card>
-                </div>
-              </div>
-
-              <Content className="px-6 pb-6 pt-4 overflow-y-auto relative flex-1">
-                <div className="space-y-6 max-w-7xl mx-auto w-full">
-                  
-                  {/* Selected Patient Profile Bar */}
-                  <Card className={`sticky top-0 z-50 border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}>
-                    <Row justify="space-between" align="middle" gutter={[16, 16]}>
-                      <Col>
-                        <Space size="middle">
-                          <Avatar size={48} className="bg-blue-100 text-blue-600 font-bold text-lg">
-                            {getInitials(selectedPatient.name)}
-                          </Avatar>
-                          <div>
-                            <Title level={4} className="m-0 font-bold">{selectedPatient.name}</Title>
-                            <Space split={<Divider type="vertical" />} className="text-xs text-slate-400">
-                              <span>Patient ID: #P-2026-{String(selectedPatient.id).padStart(4, '0')}</span>
-                              <span>Age: {selectedPatient.age}</span>
-                              <span>Gender: {selectedPatient.gender}</span>
-                            </Space>
-                          </div>
-                        </Space>
-                      </Col>
-                      <Col>
-                        <Space>
-                          <Tag color="success" icon={<CheckCircleOutlined />} className="px-3 py-1 rounded-full border-0 font-semibold flex items-center gap-1">
-                            Active Session
-                          </Tag>
-                          <Tag color="blue" className="px-3 py-1 rounded-full border-0 font-semibold uppercase">
-                            {latestRecord ? `${latestRecord.mode} Monitoring` : 'No Active Monitoring'}
-                          </Tag>
-                        </Space>
-                      </Col>
-                    </Row>
-                  </Card>
-
-                  {/* View Toggle */}
-                  <div className="mb-4">
-                    <Tabs 
-                      activeKey={activePatientView} 
-                      onChange={(k) => setActivePatientView(k as 'clinical' | 'chat')}
-                      className="mb-0"
-                    >
-                      <Tabs.TabPane tab="Clinical Diagnostics" key="clinical" />
-                      <Tabs.TabPane tab="Patient Chat" key="chat" />
-                    </Tabs>
-                  </div>
-
-                  {activePatientView === 'clinical' ? (
-                    <>
-                      <Row gutter={[24, 24]}>
-                      {/* Left Column - Live Video & AI Detections */}
-                      <Col xs={24} lg={15} className="space-y-6">
-                      
-                      {/* Live Camera Feed Card */}
-                      <Card 
-                        title={
-                          <Space>
-                            <VideoCameraOutlined className="text-blue-600" />
-                            <span className="font-bold">Live Camera Feed</span>
-                          </Space>
-                        }
-                        className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
-                        extra={
-                          <Button type="primary" icon={<VideoCameraOutlined />} className="bg-slate-950 hover:bg-slate-900 border-0 rounded-lg text-xs font-semibold h-8">
-                            Start Recording
-                          </Button>
-                        }
-                      >
-                        <Paragraph className="text-slate-400 text-xs -mt-2 mb-4">
-                          Real-time gesture and movement tracking
-                        </Paragraph>
-
-                        <div className="relative aspect-video w-full rounded-2xl overflow-hidden bg-[#0f172a] border border-slate-800 flex items-center justify-center">
-                          {latestRecord && latestRecord.video_path ? (
-                            <video 
-                              src={`http://localhost:8000/${latestRecord.video_path}`}
-                              controls
-                              className="w-full h-full object-cover"
-                              poster="/uploads/video_poster.jpg"
-                            />
-                          ) : (
-                            <div className="text-center space-y-3">
-                              <div className="text-5xl animate-pulse text-blue-500/20">
-                                <LineChartOutlined />
-                              </div>
-                              <div className="text-xs text-slate-500 font-semibold tracking-wider uppercase">Camera Feed Placeholder</div>
-                            </div>
-                          )}
-                          
-                          {/* Overlay Info bar */}
-                          <div className="absolute bottom-4 left-4 right-4 flex justify-between text-[10px] text-slate-400 bg-slate-950/70 px-3 py-1.5 rounded-lg backdrop-blur-sm">
-                            <span className="flex items-center gap-1">
-                              <HistoryOutlined /> 00:05:32
-                            </span>
-                            <span>30 FPS • 1920x1080</span>
-                          </div>
+                        <div className="flex items-start gap-1.5 text-[11px] text-slate-400 mt-1.5">
+                          <InfoCircleOutlined className="mt-[2px]" /> 
+                          <span className="flex-1 leading-tight">{localBio || 'No description provided'}</span>
                         </div>
-
-                        <div className="flex gap-4 mt-4">
-                          <Button className="flex-1 text-xs font-semibold rounded-lg">Snapshot</Button>
-                          <Button className="flex-1 text-xs font-semibold rounded-lg">Camera Settings</Button>
+                        <div className="flex items-start gap-1.5 text-[11px] text-slate-400 mt-1">
+                          <ClockCircleOutlined className="mt-[2px]" /> 
+                          <span className="flex-1 leading-tight break-all">{localHours || 'Consultation hours not set'}</span>
                         </div>
-                      </Card>
-
-                      {/* AI Detection Results Card */}
-                      <Card 
-                        title={
-                          <Space>
-                            <EyeOutlined className="text-blue-600" />
-                            <span className="font-bold">AI Detection Results</span>
-                          </Space>
-                        }
-                        className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
-                      >
-                        <Paragraph className="text-slate-400 text-xs -mt-2 mb-4">
-                          Real-time health condition analysis
-                        </Paragraph>
-
-                        <Tabs activeKey={activeTab} onChange={setActiveTab} className="border-b-0">
-                          <Tabs.TabPane tab="Current Session" key="current">
-                            <div className="space-y-4 pt-2">
-                              {patientHistory.length > 0 ? (
-                                patientHistory.slice(0, 3).map((record) => {
-                                  // Map mode to title
-                                  let title = "Movement Issue";
-                                  let severity = "Mild";
-                                  let color = "blue";
-                                  let val = record.metric_1.value;
-
-                                  if (record.mode === 'tremor') {
-                                    title = "Tremor Detected";
-                                    severity = record.status.toLowerCase().includes('moderate') ? "Moderate" : record.status.toLowerCase().includes('severe') ? "High" : "Mild";
-                                    color = severity === "High" ? "red" : severity === "Moderate" ? "amber" : "blue";
-                                  } else if (record.mode === 'posture') {
-                                    title = "Gait Abnormality";
-                                    severity = record.status.toLowerCase().includes('moderate') ? "Moderate" : record.status.toLowerCase().includes('severe') ? "High" : "Mild";
-                                    color = severity === "High" ? "red" : severity === "Moderate" ? "amber" : "blue";
-                                  } else if (record.mode === 'exercise') {
-                                    title = "Balance Issue";
-                                    severity = record.status.toLowerCase().includes('moderate') ? "Moderate" : record.status.toLowerCase().includes('severe') ? "High" : "Mild";
-                                    color = severity === "High" ? "red" : severity === "Moderate" ? "amber" : "blue";
-                                  }
-
-                                  const confidence = Math.round(val * 100);
-
-                                  return (
-                                    <div key={record.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                                      <div className="flex justify-between items-center mb-2">
-                                        <Space>
-                                          <span className="font-bold text-sm text-slate-800">{title}</span>
-                                          <Tag color={color} className="text-[10px] rounded-full border-0 px-2.5 font-semibold">{severity}</Tag>
-                                        </Space>
-                                        <div className="text-right">
-                                          <Text className="text-[10px] text-slate-400 block">Confidence</Text>
-                                          <span className="font-extrabold text-slate-800 text-lg">{confidence}%</span>
-                                        </div>
-                                      </div>
-                                      <Progress percent={confidence} showInfo={false} strokeColor="#000" trailColor="#e2e8f0" strokeWidth={6} className="m-0" />
-                                      <Text className="text-[10px] text-slate-400 mt-2 block">
-                                        Detected {new Date(record.timestamp * 1000).toLocaleTimeString()}
-                                      </Text>
-                                    </div>
-                                  );
-                                })
-                              ) : (
-                                <Empty description="No screening records found." />
-                              )}
-                            </div>
-                          </Tabs.TabPane>
-                          <Tabs.TabPane tab="Trend Analysis" key="trend">
-                            <div className="p-8 text-center text-slate-400 text-xs">
-                              Detailed trend analysis chart of patient kinesiology metrics will be rendered here.
-                            </div>
-                          </Tabs.TabPane>
-                        </Tabs>
-                      </Card>
-
-                    </Col>
-
-                    {/* Right Column - Vital Metrics & History */}
-                    <Col xs={24} lg={9} className="space-y-6">
-                      
-                      {/* Vital Metrics Card */}
-                      <Card 
-                        title={
-                          <Space>
-                            <HeartOutlined className="text-blue-600" />
-                            <span className="font-bold">Vital Metrics</span>
-                          </Space>
-                        }
-                        className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
-                      >
-                        <div className="space-y-5">
-                          {latestRecord ? (
-                            <>
-                              <div>
-                                <div className="flex justify-between text-xs mb-1.5">
-                                  <span className="text-slate-500 font-semibold">Movement Score</span>
-                                  <span className="font-bold text-slate-800">{(latestRecord.metric_1.value * 100).toFixed(0)}/100</span>
-                                </div>
-                                <Progress percent={Math.round(latestRecord.metric_1.value * 100)} showInfo={false} strokeColor="#000" strokeWidth={6} />
-                              </div>
-
-                              <div>
-                                <div className="flex justify-between text-xs mb-1.5">
-                                  <span className="text-slate-500 font-semibold">Stability Index</span>
-                                  <span className="font-bold text-slate-800">{(latestRecord.metric_2.value * 10).toFixed(1)}/10</span>
-                                </div>
-                                <Progress percent={Math.round(latestRecord.metric_2.value * 100)} showInfo={false} strokeColor="#000" strokeWidth={6} />
-                              </div>
-                            </>
-                          ) : (
-                            <div className="text-center py-4 text-slate-400 text-xs">No metrics recorded</div>
-                          )}
-
-                          <Divider className="my-3" />
-
-                          <div className="space-y-2.5 text-xs">
-                            <div className="flex justify-between">
-                              <span className="text-slate-400">Session Duration</span>
-                              <span className="font-semibold text-slate-800">00:05:32</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-slate-400">Frames Analyzed</span>
-                              <span className="font-semibold text-slate-800">9,960</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-slate-400">Gestures Detected</span>
-                              <span className="font-semibold text-slate-800">247</span>
-                            </div>
-                          </div>
-                        </div>
-                      </Card>
-
-                      {/* Recent Sessions Card */}
-                      <Card 
-                        title={
-                          <Space>
-                            <HistoryOutlined className="text-blue-600" />
-                            <span className="font-bold">Recent Sessions</span>
-                          </Space>
-                        }
-                        className={`border border-slate-100 shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}
-                      >
-                        <div className="space-y-3">
-                          {patientHistory.slice(0, 3).map((record) => (
-                            <div key={record.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
-                              <div className="flex justify-between items-center">
-                                <span className="font-bold text-xs text-slate-800">
-                                  {new Date(record.timestamp * 1000).toLocaleDateString()} {new Date(record.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                                </span>
-                                <Tag color="blue" className="text-[9px] rounded-full border-0 px-2 font-semibold uppercase">{record.mode}</Tag>
-                              </div>
-                              <div className="flex justify-between text-[10px] text-slate-400">
-                                <span>Duration: 12 min</span>
-                                <span>{record.status}</span>
-                              </div>
-                            </div>
-                          ))}
-
-                          {patientHistory.length > 3 && (
-                            <Button type="text" block className="text-xs text-blue-600 font-bold mt-2">
-                              View All Sessions
-                            </Button>
-                          )}
-                        </div>
-                      </Card>
-
-                    </Col>
-
-                  </Row>
-
-                  {/* Bottom Action Bar */}
-                  <div className={`p-4 rounded-2xl border border-slate-100 flex flex-wrap justify-between items-center gap-4 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}>
-                    <Space>
-                      <Button 
-                        type="primary" 
-                        icon={<FilePdfOutlined />} 
-                        disabled={patientHistory.length === 0}
-                        onClick={handleExportPDF}
-                        className="bg-slate-950 hover:bg-slate-900 border-0 rounded-xl font-semibold text-xs px-6 py-4 flex items-center h-auto"
-                      >
-                        Generate Report
-                      </Button>
-                      <Button icon={<LineChartOutlined />} className="rounded-xl text-xs font-semibold py-4 flex items-center h-auto">
-                        View Analytics
-                      </Button>
-                      <Button icon={<ShareAltOutlined />} className="rounded-xl text-xs font-semibold py-4 flex items-center h-auto">
-                        Share with Team
-                      </Button>
+                      </div>
                     </Space>
-                    <Button type="text" icon={<SettingOutlined className="text-slate-400 text-lg" />} />
-                  </div>
-                </>
-              ) : (
-                <DoctorPatientChat currentUser={currentUser} selectedPatient={selectedPatient} isDarkMode={isDarkMode} />
+                  </Col>
+                  <Col>
+                    <Space>
+                      <Tag color="success" icon={<CheckCircleOutlined />} className="px-3 py-1 rounded-full border-0 font-semibold">
+                        Available for Consult
+                      </Tag>
+                      <Tag color="blue" className="px-3 py-1 rounded-full border-0 font-semibold uppercase">
+                        Pro Mode
+                      </Tag>
+                    </Space>
+                  </Col>
+                </Row>
+              </Card>
+            </div>
+          </div>
+
+          <Content className="px-6 pb-6 pt-4 overflow-y-auto relative flex-1 custom-scrollbar">
+            <div className="space-y-6 max-w-7xl mx-auto w-full lg:h-full flex flex-col lg:min-h-0">
+              
+              {activeNav === 'screening' && (
+                <LiveDetectionPanel
+                  currentUser={currentUser}
+                  isDarkMode={isDarkMode}
+                  activeMode={activeMode}
+                  setActiveMode={setActiveMode}
+                  screenState={screenState}
+                  setScreenState={setScreenState}
+                  backendConnected={backendConnected}
+                  analysisResult={analysisResult}
+                  setAnalysisResult={setAnalysisResult}
+                  diagnosisReport={diagnosisReport}
+                  setDiagnosisReport={setDiagnosisReport}
+                  dbHistory={doctorDbHistory}
+                  fetchHistory={fetchDoctorHistory}
+                  uploading={uploading}
+                />
               )}
+
+              {activeNav === 'schedule' && (
+                <div className="flex-1 min-h-0 overflow-y-auto w-full">
+                  <DoctorScheduleTab currentUser={currentUser} isDarkMode={isDarkMode} refreshDashboard={fetchDashboardData} />
                 </div>
-              </Content>
-            </>
-          ) : (
-            <Content className="p-6 flex items-center justify-center flex-1">
-              <Empty
-                image={<LineChartOutlined style={{ fontSize: 64, color: isDarkMode ? '#334155' : '#cbd5e1' }} />}
-                description={
-                  <span className={`text-lg font-semibold ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                    Select a patient from the list to view details
-                  </span>
-                }
-              />
-            </Content>
-          )}
+              )}
+
+              {activeNav === 'history' && (
+                <div className="flex-1 min-h-0 overflow-y-auto" style={{ background: '#0d1117', borderRadius: 24, padding: '24px 32px' }}>
+                  <SessionHistoryTab dbHistory={doctorDbHistory} isDarkMode={true} />
+                </div>
+              )}
+
+              {activeNav === 'calendar' && (
+                <div style={{ overflowX: 'hidden', width: '100%' }}>
+                  <Row gutter={[24, 24]}>
+                    {/* Left: Month Calendar */}
+                    <Col xs={24} lg={14}>
+                      <Card
+                        className={`rounded-2xl border shadow-sm ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}
+                        bodyStyle={{ padding: '20px 24px' }}
+                        title={
+                          <div className="flex items-center justify-between">
+                            <Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={() => setCalSelectedDate(calSelectedDate.subtract(1, 'month'))} />
+                            <Text className={`font-bold text-base ${isDarkMode ? 'text-white' : ''}`}>{calSelectedDate.format('MMMM YYYY')}</Text>
+                            <Button type="text" size="small" icon={<ArrowLeftOutlined style={{ transform: 'rotate(180deg)' }} />} onClick={() => setCalSelectedDate(calSelectedDate.add(1, 'month'))} />
+                          </div>
+                        }
+                      >
+                        {/* Day-of-week headers */}
+                        <div className="grid grid-cols-7 mb-2">
+                          {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
+                            <div key={d} className="text-center text-[10px] font-bold text-slate-400 uppercase py-1">{d}</div>
+                          ))}
+                        </div>
+                        {/* Calendar grid */}
+                        <div className="grid grid-cols-7 gap-1">
+                          {(() => {
+                            // Malaysian public holidays (YYYY-MM-DD)
+                            const MY_HOLIDAYS: Record<string, string> = {
+                              '2025-01-01': 'New Year\'s Day', '2025-01-29': 'CNY', '2025-01-30': 'CNY',
+                              '2025-02-01': 'Federal Territory Day', '2025-02-12': 'Thaipusam',
+                              '2025-03-30': 'Nuzul Quran', '2025-03-31': 'Hari Raya Aidilfitri',
+                              '2025-04-01': 'Hari Raya Aidilfitri', '2025-05-01': 'Labour Day',
+                              '2025-05-12': 'Wesak Day', '2025-06-02': 'Agong\'s Birthday',
+                              '2025-06-06': 'Hari Raya Aidiladha', '2025-06-26': 'Awal Muharram',
+                              '2025-08-31': 'National Day', '2025-09-04': 'Prophet\'s Birthday',
+                              '2025-09-16': 'Malaysia Day', '2025-10-20': 'Deepavali',
+                              '2025-12-25': 'Christmas',
+                              '2026-01-01': 'New Year\'s Day', '2026-01-28': 'CNY', '2026-01-29': 'CNY',
+                              '2026-02-01': 'Federal Territory Day', '2026-02-17': 'Thaipusam',
+                              '2026-03-20': 'Hari Raya Aidilfitri', '2026-03-21': 'Hari Raya Aidilfitri',
+                              '2026-05-01': 'Labour Day', '2026-05-31': 'Wesak Day',
+                              '2026-06-01': 'Agong\'s Birthday', '2026-05-27': 'Hari Raya Aidiladha',
+                              '2026-06-16': 'Awal Muharram', '2026-08-31': 'National Day',
+                              '2026-09-16': 'Malaysia Day', '2026-10-09': 'Prophet\'s Birthday',
+                              '2026-10-28': 'Deepavali', '2026-12-25': 'Christmas',
+                              '2027-01-01': 'New Year\'s Day', '2027-02-17': 'CNY', '2027-02-18': 'CNY',
+                              '2027-03-09': 'Hari Raya Aidilfitri', '2027-03-10': 'Hari Raya Aidilfitri',
+                              '2027-05-01': 'Labour Day', '2027-05-20': 'Wesak Day',
+                              '2027-05-17': 'Hari Raya Aidiladha', '2027-06-07': 'Agong\'s Birthday',
+                              '2027-06-06': 'Awal Muharram', '2027-08-31': 'National Day',
+                              '2027-09-16': 'Malaysia Day', '2027-09-29': 'Prophet\'s Birthday',
+                              '2027-11-08': 'Deepavali', '2027-12-25': 'Christmas',
+                            };
+
+                            const firstDay = calSelectedDate.startOf('month');
+                            const daysInMonth = calSelectedDate.daysInMonth();
+                            const startDow = firstDay.day();
+                            const calDays: (number | null)[] = Array(startDow).fill(null).concat(
+                              Array.from({ length: daysInMonth }, (_, i) => i + 1)
+                            );
+                            while (calDays.length % 7 !== 0) calDays.push(null);
+                            return calDays.map((d, i) => {
+                              if (!d) return <div key={i} />;
+                              const dateStr = calSelectedDate.date(d).format('YYYY-MM-DD');
+                              const hasAppt = agendaAppointments.some(a => a.appointment_date === dateStr && a.status !== 'CANCELLED');
+                              const hasBlock = agendaOverrides.some(o => o.date === dateStr);
+                              const isTodayCell = dayjs().format('YYYY-MM-DD') === dateStr;
+                              const isSelected = calSelectedDate.format('YYYY-MM-DD') === dateStr;
+                              const isSunday = calSelectedDate.date(d).day() === 0;
+                              const isSaturday = calSelectedDate.date(d).day() === 6;
+                              const holiday = MY_HOLIDAYS[dateStr];
+                              const isHoliday = !!holiday;
+
+                              let bgColor = 'transparent';
+                              if (isSelected) bgColor = '#2563eb';
+                              else if (isTodayCell) bgColor = isDarkMode ? 'rgba(37,99,235,0.25)' : '#eff6ff';
+
+                              let textColor = '';
+                              if (isSelected) textColor = '#ffffff';
+                              else if (isTodayCell) textColor = '#2563eb';
+                              else if (isHoliday || isSunday) textColor = '#ef4444';
+                              else if (isSaturday) textColor = '#3b82f6';
+                              else textColor = isDarkMode ? '#cbd5e1' : '#374151';
+
+                              return (
+                                <button
+                                  key={i}
+                                  onClick={() => setCalSelectedDate(calSelectedDate.date(d))}
+                                  title={holiday || ''}
+                                  style={{
+                                    background: bgColor,
+                                    color: textColor,
+                                    cursor: 'pointer',
+                                    border: isTodayCell && !isSelected ? `1px solid ${isDarkMode ? '#3b82f6' : '#bfdbfe'}` : 'none',
+                                    borderRadius: '8px',
+                                    padding: '2px 1px 4px',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    transition: 'all 0.15s',
+                                    minHeight: '40px',
+                                    position: 'relative',
+                                    width: '100%',
+                                  }}
+                                >
+                                  <span style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.2 }}>{d}</span>
+                                  {holiday && (
+                                    <span style={{ fontSize: 7, color: isSelected ? '#fecaca' : '#ef4444', lineHeight: 1.1, textAlign: 'center', maxWidth: 36, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                                      {holiday.split(' ')[0]}
+                                    </span>
+                                  )}
+                                  <div style={{ display: 'flex', gap: 2, marginTop: 1, height: 5, alignItems: 'center' }}>
+                                    {hasAppt && <span style={{ width: 5, height: 5, borderRadius: '50%', background: isSelected ? '#fff' : '#3b82f6', display: 'inline-block' }} />}
+                                    {hasBlock && <span style={{ width: 5, height: 5, borderRadius: '50%', background: isSelected ? '#fca5a5' : '#f87171', display: 'inline-block' }} />}
+                                    {isHoliday && !isSelected && <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#fbbf24', display: 'inline-block' }} />}
+                                  </div>
+                                </button>
+                              );
+                            });
+                          })()}
+                        </div>
+                        {/* Legend */}
+                        <div className="flex flex-wrap gap-3 mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
+                          <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-blue-500 inline-block" /><Text className="text-xs text-slate-500">Appointment</Text></div>
+                          <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-400 inline-block" /><Text className="text-xs text-slate-500">Blocked</Text></div>
+                          <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-yellow-400 inline-block" /><Text className="text-xs text-slate-500">Public Holiday</Text></div>
+                          <div className="flex items-center gap-1.5"><span className="text-red-500 text-xs font-bold">S</span><Text className="text-xs text-slate-500">= Sun/Holiday</Text></div>
+                          <div className="flex items-center gap-1.5"><span className="text-blue-500 text-xs font-bold">S</span><Text className="text-xs text-slate-500">= Sat</Text></div>
+                        </div>
+
+                      </Card>
+                    </Col>
+
+                    {/* Right: Day detail */}
+                    <Col xs={24} lg={10}>
+                      <Card
+                        className={`rounded-2xl border shadow-sm ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}
+                        bodyStyle={{ padding: '20px 24px' }}
+                        title={
+                          <div className="flex items-center gap-2">
+                            <CalendarOutlined className="text-blue-500" />
+                            <Text className={`font-bold ${isDarkMode ? 'text-white' : ''}`}>{calSelectedDate.format('ddd, D MMM YYYY')}</Text>
+                          </div>
+                        }
+                      >
+                        {(() => {
+                          const todayStr = calSelectedDate.format('YYYY-MM-DD');
+                          const dow = calSelectedDate.day();
+                          const dayAppts = agendaAppointments.filter(a => a.appointment_date === todayStr && a.status !== 'CANCELLED');
+                          const dayBlocks = agendaOverrides.filter(o => o.date === todayStr);
+                          const workSched = agendaSchedule.find((s: any) => s.day_of_week === dow);
+
+                          if (dayAppts.length === 0 && dayBlocks.length === 0 && !workSched) {
+                            return <Empty description="No events on this day" />;
+                          }
+                          return (
+                            <div className="space-y-3">
+                              {/* Working hours */}
+                              {workSched && (
+                                <div className="flex items-start gap-3 p-3 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/40 rounded-xl">
+                                  <span className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
+                                  <div>
+                                    <Text className="font-semibold text-emerald-700 dark:text-emerald-300 block">Working Hours</Text>
+                                    <Text className="text-xs text-emerald-600">{workSched.start_time} – {workSched.end_time}</Text>
+                                  </div>
+                                </div>
+                              )}
+                              {/* Blocked times */}
+                              {dayBlocks.map((blk: any, i: number) => (
+                                <div key={`blk-${i}`} className="flex items-start gap-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/40 rounded-xl">
+                                  <span className="w-2 h-2 rounded-full bg-red-400 mt-1.5 shrink-0" />
+                                  <div>
+                                    <Text className="font-semibold text-red-700 dark:text-red-300 block">{blk.reason || 'Blocked'}</Text>
+                                    <Text className="text-xs text-red-500">{blk.start_time} – {blk.end_time}</Text>
+                                  </div>
+                                </div>
+                              ))}
+                              {/* Appointments */}
+                              {dayAppts.map((appt: any, i: number) => (
+                                <div key={`appt-${i}`} className="flex items-start gap-3 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-900/40 rounded-xl">
+                                  <span className="w-2 h-2 rounded-full bg-blue-500 mt-1.5 shrink-0" />
+                                  <div>
+                                    <Text className="font-semibold text-blue-700 dark:text-blue-300 block">{appt.patient_name || appt.patient_email}</Text>
+                                    <Text className="text-xs text-blue-500">{appt.start_time} – {appt.end_time} • {appt.status}</Text>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
+                      </Card>
+                    </Col>
+                  </Row>
+                </div>
+              )}
+
+
+
+
+              {activeNav === 'learn' && (
+                <div className="flex-1 min-h-0 overflow-y-auto max-w-7xl mx-auto w-full">
+                  <LearnAndFaqTab isDarkMode={isDarkMode} />
+                </div>
+              )}
+
+              {activeNav === 'patients' && (
+                selectedPatient ? (
+                  <>
+                    {/* We no longer show the duplicate Patient Profile Bar here */}
+
+                    <Row gutter={[24, 24]} className="flex-1 min-h-0 h-full w-full mx-0">
+                      {/* Left Column - Patient Chat */}
+                      <Col xs={24} lg={16} className="h-full">
+                        <DoctorPatientChat 
+                          currentUser={currentUser} 
+                          selectedPatient={selectedPatient} 
+                          isDarkMode={isDarkMode} 
+                          onBack={() => setSelectedPatient(null)}
+                        />
+                      </Col>
+
+                      {/* Right Column - Appointment Records & Suggestions */}
+                      <Col xs={24} lg={8} className="h-full">
+                        <Card 
+                          title={
+                            <Space>
+                              <FileTextOutlined className="text-blue-600" />
+                              <span className={`font-bold ${isDarkMode ? 'text-white' : ''}`}>Consultation Notes</span>
+                            </Space>
+                          }
+                          className={`h-full flex flex-col border shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}
+                          bodyStyle={{ display: 'flex', flexDirection: 'column', flex: 1, padding: '20px' }}
+                        >
+                          <div className="flex-1 flex flex-col space-y-4">
+                            <div>
+                              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Diagnosis / Findings</div>
+                              <Input.TextArea
+                                rows={4}
+                                placeholder="Enter clinical observations here..."
+                                className={`rounded-xl border ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white placeholder:text-slate-500' : 'bg-slate-50 border-slate-200'}`}
+                              />
+                            </div>
+                            <div className="flex-1 flex flex-col">
+                              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Treatment Suggestions</div>
+                              <Input.TextArea
+                                className={`flex-1 rounded-xl border resize-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white placeholder:text-slate-500' : 'bg-slate-50 border-slate-200'}`}
+                                placeholder="Enter recommendations, exercises, or follow-up instructions..."
+                              />
+                            </div>
+                            <Button 
+                              type="primary" 
+                              className="bg-blue-600 hover:bg-blue-500 border-0 rounded-xl font-bold h-10 mt-2"
+                              onClick={() => message.success('Consultation record saved successfully!')}
+                            >
+                              Save Appointment Record
+                            </Button>
+                          </div>
+                        </Card>
+                      </Col>
+                    </Row>
+                  </>
+                ) : (
+                  <div className={`p-6 rounded-2xl border flex flex-col flex-1 min-h-0 lg:h-full ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}>
+                    <div className="flex justify-between items-center mb-6">
+                      <Title level={4} className={`m-0 ${isDarkMode ? 'text-white' : ''}`}>Active Patients ({filteredPatients.length})</Title>
+                      <Input
+                        prefix={<SearchOutlined className="text-slate-400" />}
+                        placeholder="Search patients..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className={`w-64 rounded-xl ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200'}`}
+                      />
+                    </div>
+                    
+                    {filteredPatients.length === 0 ? (
+                      <div className="flex-1 flex items-center justify-center">
+                        <Empty description={<span className={isDarkMode ? 'text-slate-400' : 'text-slate-500'}>No patients found</span>} />
+                      </div>
+                    ) : (
+                      <List
+                        className="overflow-y-auto pr-2 custom-scrollbar flex-1"
+                        itemLayout="horizontal"
+                        dataSource={filteredPatients}
+                        renderItem={(patient) => {
+                          const unread = unreadCounts[patient.id] || 0;
+                          return (
+                            <List.Item
+                              className={`cursor-pointer transition-colors border-b ${isDarkMode ? 'border-slate-800 hover:bg-slate-800' : 'border-slate-100 hover:bg-slate-50'}`}
+                              style={{ padding: '16px 24px' }}
+                              onClick={() => handleSelectPatient(patient)}
+                            >
+                              <List.Item.Meta
+                                avatar={
+                                  <Avatar size={40} className="bg-blue-100 text-blue-600 font-bold text-base">
+                                    {getInitials(patient.name)}
+                                  </Avatar>
+                                }
+                                title={<span className={`font-bold text-base ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{patient.name}</span>}
+                                description={<span className="text-xs text-slate-500">ID: #P-{String(patient.id).padStart(4, '0')} • {patient.gender}</span>}
+                              />
+                              {unread > 0 && (
+                                <Badge count={unread} />
+                              )}
+                            </List.Item>
+                          );
+                        }}
+                      />
+                    )}
+                  </div>
+                )
+              )}
+            </div>
+          </Content>
         </div>
       </Layout>
       <Modal
-        title="Doctor Profile & Timetable"
+        title="Doctor Profile Settings"
         open={isSettingsModalOpen}
         onCancel={() => setIsSettingsModalOpen(false)}
         footer={null}
         width={700}
       >
-        <Tabs defaultActiveKey="profile">
-          <Tabs.TabPane tab="Profile Details" key="profile">
-            <div className="mb-6 flex flex-col items-center">
-              <Avatar src={`http://localhost:8000/api/profile/picture/${currentUser.id}`} size={80} className="mb-2 bg-blue-100 text-blue-600 font-bold text-2xl">
-                {getInitials(currentUser.name)}
-              </Avatar>
-              <Upload 
-                showUploadList={false} 
-                beforeUpload={(file) => {
-                  const formData = new FormData();
-                  formData.append('email', currentUser.email);
-                  formData.append('file', file);
-                  sharedApi.uploadProfilePicture(formData).then(() => {
-                    message.success("Profile picture updated!");
-                    window.location.reload();
+        <div className="flex flex-col items-center py-6">
+          <Badge
+            offset={[-10, 70]}
+            count={
+              <CloseCircleFilled
+                style={{ fontSize: '20px', color: '#ff4d4f', cursor: 'pointer', backgroundColor: 'white', borderRadius: '50%' }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  sharedApi.deleteProfilePicture(currentUser.id).then(() => {
+                    message.success("Profile picture removed!");
+                    setAvatarKey(Date.now());
                   }).catch(err => {
-                    message.error("Failed to upload picture");
+                    message.error("Failed to remove picture");
                   });
-                  return false;
                 }}
-              >
-                <Button size="small">Change Picture</Button>
-              </Upload>
+              />
+            }
+          >
+            <Upload
+              showUploadList={false}
+              beforeUpload={(file) => {
+                const formData = new FormData();
+                formData.append('email', currentUser.email);
+                formData.append('file', file);
+                sharedApi.uploadProfilePicture(formData).then(() => {
+                  message.success("Profile picture updated!");
+                  setAvatarKey(Date.now());
+                }).catch(err => {
+                  message.error("Failed to upload picture");
+                });
+                return false;
+              }}
+            >
+              <Avatar src={`http://localhost:8000/api/profile/picture/${currentUser.id}?t=${avatarKey}`} size={80} className="bg-blue-100 text-blue-600 font-bold text-3xl shadow-md cursor-pointer hover:opacity-80 transition-opacity">
+                {getInitials(localName)}
+              </Avatar>
+            </Upload>
+          </Badge>
+
+          <div className="w-full mt-8 text-left">
+            <Typography.Title level={5} className="!mb-4">Basic Information</Typography.Title>
+            <div className="bg-white dark:bg-slate-900 rounded-xl p-4 border border-slate-200 dark:border-slate-700 shadow-sm mb-6">
+              <div className="flex justify-between items-center py-2 border-b border-slate-100 dark:border-slate-800">
+                <span className="text-slate-500 font-semibold">Name</span>
+                <Text
+                  editable={{
+                    onChange: (newName) => {
+                      if (!newName.trim()) return;
+                      sharedApi.updateProfileName(currentUser.id, newName).then(() => {
+                        message.success("Name updated successfully!");
+                        const savedUser = localStorage.getItem('user');
+                        if (savedUser) {
+                          try {
+                            const parsed = JSON.parse(savedUser);
+                            parsed.name = newName;
+                            localStorage.setItem('user', JSON.stringify(parsed));
+                          } catch (e) { }
+                        }
+                        setLocalName(newName);
+                      }).catch(err => message.error("Failed to update name"));
+                    }
+                  }}
+                  className="font-bold text-slate-800 dark:text-white m-0"
+                >
+                  {localName}
+                </Text>
+              </div>
+              <div className="flex justify-between items-center py-2 border-b border-slate-100 dark:border-slate-800">
+                <span className="text-slate-500 font-semibold">Email</span>
+                <span className="text-slate-800 dark:text-slate-300">{currentUser.email}</span>
+              </div>
+              <div className="flex justify-between items-center py-2">
+                <span className="text-slate-500 font-semibold">License</span>
+                <span className="text-slate-800 dark:text-slate-300">{currentUser.medical_license || 'Verified'}</span>
+              </div>
             </div>
+
+            <Typography.Title level={5} className="!mb-4">Professional Details</Typography.Title>
             <Form
               form={settingsForm}
               layout="vertical"
               onFinish={handleSaveSettings}
               initialValues={{
-                bio: (currentUser as any).bio || '',
-                clinic_name: (currentUser as any).clinic_name || '',
-                consultation_hours: (currentUser as any).consultation_hours || ''
+                bio: localBio,
+                clinic_name: localClinic,
+                consultation_hours: localHours
               }}
+              className="bg-white dark:bg-slate-900 rounded-xl p-6 border border-slate-200 dark:border-slate-700 shadow-sm"
             >
-              <Form.Item label="Bio / Description" name="bio">
-                <Input.TextArea rows={4} placeholder="Describe your expertise and background..." />
+              <Form.Item label={<span className="font-semibold text-slate-500">Bio / Description</span>} name="bio">
+                <Input.TextArea rows={4} placeholder="Describe your expertise and background..." className="rounded-lg" />
               </Form.Item>
-              <Form.Item label="Clinic Name" name="clinic_name">
-                <Input placeholder="E.g., City Health Clinic" />
+              <Form.Item label={<span className="font-semibold text-slate-500">Clinic Name</span>} name="clinic_name">
+                <Input placeholder="E.g., City Health Clinic" className="rounded-lg" />
               </Form.Item>
-              <Form.Item label="Consultation Hours & Links" name="consultation_hours">
-                <Input.TextArea rows={4} placeholder="E.g. Mon-Fri: 9am - 5pm\nZoom Link: https://..." />
+              <Form.Item label={<span className="font-semibold text-slate-500">Consultation Notes (e.g. Zoom links)</span>} name="consultation_hours">
+                <Input.TextArea rows={4} placeholder="E.g. Zoom Link: https://..." className="rounded-lg" />
               </Form.Item>
-              <Button type="primary" htmlType="submit" block>Save Changes</Button>
+              <Button type="primary" htmlType="submit" size="large" block className="rounded-lg mt-2">Save Details</Button>
             </Form>
-          </Tabs.TabPane>
-          <Tabs.TabPane tab="Schedule Overrides (Surgery/Breaks)" key="timetable">
-            <div className="space-y-6">
-              <Card title="Add Surgery / Blocked Time" size="small">
-                <Form form={overrideForm} layout="vertical" onFinish={handleAddOverride}>
-                  <Row gutter={16}>
-                    <Col span={8}>
-                      <Form.Item label="Date" name="date" rules={[{ required: true }]}>
-                        <DatePicker className="w-full" />
-                      </Form.Item>
-                    </Col>
-                    <Col span={8}>
-                      <Form.Item label="Time Range" name="timeRange" rules={[{ required: true }]}>
-                        <TimePicker.RangePicker format="HH:mm" />
-                      </Form.Item>
-                    </Col>
-                    <Col span={8}>
-                      <Form.Item label="Reason" name="reason">
-                        <Input placeholder="E.g. Surgery" />
-                      </Form.Item>
-                    </Col>
-                  </Row>
-                  <Button type="primary" htmlType="submit">Block Time</Button>
-                </Form>
-              </Card>
-
-              <Card title="Current Blocked Times" size="small">
-                <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                  {overrides.length === 0 ? (
-                    <Empty description="No blocked times." />
-                  ) : (
-                    overrides.map(ovr => (
-                      <div key={ovr.id} className="flex justify-between items-center p-3 border rounded-lg bg-red-50/50">
-                        <div>
-                          <Typography.Text className="font-semibold">{ovr.date}</Typography.Text>
-                          <br />
-                          <Typography.Text className="text-xs text-slate-500">{ovr.start_time} - {ovr.end_time} ({ovr.reason})</Typography.Text>
-                        </div>
-                        <Button danger size="small" onClick={() => handleDeleteOverride(ovr.id)}>Remove</Button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </Card>
-            </div>
-          </Tabs.TabPane>
-        </Tabs>
-      </Modal>
-
-      <Modal
-        title="Appointments"
-        open={isAppointmentsModalOpen}
-        onCancel={() => setIsAppointmentsModalOpen(false)}
-        footer={null}
-        width={700}
-      >
-        <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
-          {appointments.length === 0 ? (
-            <Empty description="No appointments scheduled." />
-          ) : (
-            appointments.map(appt => (
-              <Card key={appt.id} size="small" className="border-slate-200">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <Typography.Title level={5} className="!m-0">{appt.patient_name}</Typography.Title>
-                    <Typography.Text className="text-xs text-slate-500 block">{appt.date} at {appt.time}</Typography.Text>
-                    {appt.notes && <Typography.Text className="text-sm mt-2 block">{appt.notes}</Typography.Text>}
-                  </div>
-                  <div>
-                    {appt.status === 'pending' ? (
-                      <Space>
-                              <Button type="link" size="small" onClick={() => handleUpdateAppointment(appt.id, 'confirmed')} className="text-emerald-600 font-semibold p-0">Accept</Button>
-                              <Button type="link" size="small" onClick={() => handleUpdateAppointment(appt.id, 'cancelled')} className="text-rose-600 font-semibold p-0">Decline</Button>
-                      </Space>
-                    ) : (
-                      <Tag color={appt.status === 'confirmed' ? 'green' : appt.status === 'cancelled' ? 'red' : 'default'}>
-                        {appt.status.toUpperCase()}
-                      </Tag>
-                    )}
-                  </div>
-                </div>
-              </Card>
-            ))
-          )}
+          </div>
         </div>
       </Modal>
 
 
+
+      <Modal
+        title="Today's Agenda"
+        open={isTodayAgendaOpen}
+        onCancel={() => setIsTodayAgendaOpen(false)}
+        footer={null}
+        width={500}
+      >
+        <div className="max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+          <DailyTimeline
+            date={dayjs()}
+            appointments={agendaAppointments}
+            weeklySchedule={agendaSchedule}
+            overrides={agendaOverrides}
+            isDarkMode={isDarkMode}
+          />
+        </div>
+      </Modal>
 
       <Modal
         title="Notifications"

@@ -5,6 +5,7 @@ import { AdminDashboard } from './components/dashboard/AdminDashboard';
 import { DoctorDashboard } from './components/dashboard/DoctorDashboard';
 import { PendingVerification } from './components/dashboard/PendingVerification';
 import { PatientDashboard } from './components/dashboard/PatientDashboard';
+import { NotificationProvider } from './contexts/NotificationContext';
 
 export default function App() {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
@@ -42,12 +43,14 @@ export default function App() {
 
   if (currentUser.role === 'admin') {
     return (
-      <AdminDashboard
-        currentUser={currentUser}
-        handleLogout={handleLogout}
-        isDarkMode={isDarkMode}
-        setIsDarkMode={setIsDarkMode}
-      />
+      <NotificationProvider userId={currentUser.id}>
+        <AdminDashboard
+          currentUser={currentUser}
+          handleLogout={handleLogout}
+          isDarkMode={isDarkMode}
+          setIsDarkMode={setIsDarkMode}
+        />
+      </NotificationProvider>
     );
   }
 
@@ -62,22 +65,26 @@ export default function App() {
       );
     }
     return (
-      <DoctorDashboard
-        currentUser={currentUser}
-        handleLogout={handleLogout}
-        isDarkMode={isDarkMode}
-      />
+      <NotificationProvider userId={currentUser.id}>
+        <DoctorDashboard
+          currentUser={currentUser}
+          handleLogout={handleLogout}
+          isDarkMode={isDarkMode}
+        />
+      </NotificationProvider>
     );
   }
 
   // Default is PatientDashboard (role is 'general user' or fallback)
   return (
-    <PatientDashboard
-      currentUser={currentUser}
-      handleLogout={handleLogout}
-      handleChangePassword={handleChangePassword}
-      isDarkMode={isDarkMode}
-      setIsDarkMode={setIsDarkMode}
-    />
+    <NotificationProvider userId={currentUser.id}>
+      <PatientDashboard
+        currentUser={currentUser}
+        handleLogout={handleLogout}
+        handleChangePassword={handleChangePassword}
+        isDarkMode={isDarkMode}
+        setIsDarkMode={setIsDarkMode}
+      />
+    </NotificationProvider>
   );
 }

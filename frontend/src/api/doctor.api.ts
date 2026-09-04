@@ -23,3 +23,9 @@ export const deleteScheduleOverride = (email: string, overrideId: number) =>
 
 export const updateDoctorProfile = (data: any) => 
   fetchApi<any>('/api/doctor/profile', { method: 'PUT', body: JSON.stringify(data) });
+
+export const getDoctorSchedule = (email: string) => 
+  fetchApi<any[]>(`/api/doctor/schedule?email=${encodeURIComponent(email)}`);
+
+export const updateDoctorSchedule = (data: any) => 
+  fetchApi<any>('/api/doctor/schedule', { method: 'PUT', body: JSON.stringify(data) });

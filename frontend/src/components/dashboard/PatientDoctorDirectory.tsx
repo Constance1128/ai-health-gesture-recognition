@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, Row, Col, List, Avatar, Typography, Input, Button, Switch, message, Upload, Spin, Tag, Badge, Divider, Tabs, Form, DatePicker, TimePicker, Modal, Space, Empty } from 'antd';
-import { SendOutlined, PaperClipOutlined, DeleteOutlined, UserOutlined, SearchOutlined, CalendarOutlined, ClockCircleOutlined, EnvironmentOutlined, BellOutlined } from '@ant-design/icons';
+import { Card, Row, Col, List, Avatar, Typography, Input, Button, Switch, message, Upload, Spin, Tag, Badge, Divider, Tabs, Form, DatePicker, TimePicker, Modal, Space, Empty, Popover, Image, Timeline } from 'antd';
+import { SendOutlined, PaperClipOutlined, DeleteOutlined, UserOutlined, SearchOutlined, CalendarOutlined, ClockCircleOutlined, EnvironmentOutlined, SmileOutlined, CheckOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { Doctor, Message, User, Appointment } from '../../types';
 import dayjs from 'dayjs';
 import * as patientApi from '../../api/patient.api';
@@ -23,14 +23,17 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
   const [chatHistory, setChatHistory] = useState<Message[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [messageInput, setMessageInput] = useState('');
+  const [firstUnreadMessageId, setFirstUnreadMessageId] = useState<number | null>(null);
   
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [unreadCounts, setUnreadCounts] = useState<Record<number, number>>({});
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [bookingForm] = Form.useForm();
   
   const [selectedDate, setSelectedDate] = useState<dayjs.Dayjs | null>(null);
   const [selectedTimeSlot, setSelectedTimeSlot] = useState<string>('');
   const [overrides, setOverrides] = useState<any[]>([]);
+  const [doctorSchedule, setDoctorSchedule] = useState<any[]>([]);
   const [isNotificationsModalOpen, setIsNotificationsModalOpen] = useState(false);
   const [notifications, setNotifications] = useState<any[]>([]);
   
@@ -49,18 +52,51 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
     }
   };
 
+  const fetchUnreadCounts = async () => {
+    try {
+      const counts = await chatApi.getUnreadCounts(currentUser.email);
+      setUnreadCounts(counts);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   useEffect(() => {
     fetchDoctors();
+    fetchUnreadCounts();
+    const interval = setInterval(() => {
+      fetchDoctors();
+      fetchUnreadCounts();
+    }, 5000); // Poll every 5s
+    return () => clearInterval(interval);
   }, [currentUser.email]);
 
-  const fetchChat = async (doctorId: number) => {
+  const scrollToBottom = () => {
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 300);
+  };
+
+  const fetchChat = async (doctorId: number, shouldScroll = false) => {
     try {
       setChatLoading(true);
       const data = await chatApi.getChatHistory(currentUser.email, doctorId);
+      
+      setFirstUnreadMessageId(prev => {
+        if (prev === null) {
+          const unreadMsg = data.find(m => m.sender_id !== currentUser.id && m.is_read === 0);
+          return unreadMsg ? unreadMsg.id : null;
+        }
+        return prev;
+      });
+
       setChatHistory(data);
-      if (messagesEndRef.current) {
-        messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      if (shouldScroll) {
+        scrollToBottom();
       }
+      
+      // Mark messages as read
+      await chatApi.markMessagesRead({ email: currentUser.email, sender_id: doctorId });
     } catch (e) {
       console.error(e);
       message.error("Failed to load chat");
@@ -71,9 +107,10 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
 
   useEffect(() => {
     if (selectedDoctor) {
-      fetchChat(selectedDoctor.id);
+      setFirstUnreadMessageId(null);
+      fetchChat(selectedDoctor.id, true);
       fetchDoctorData();
-      const interval = setInterval(() => fetchChat(selectedDoctor.id), 5000); // Polling every 5s
+      const interval = setInterval(() => fetchChat(selectedDoctor.id, false), 5000);
       return () => clearInterval(interval);
     }
   }, [selectedDoctor, currentUser.email]);
@@ -86,6 +123,11 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
 
       const overridesData = await doctorApi.getScheduleOverrides(selectedDoctor.email || '');
       setOverrides(overridesData);
+
+      if (selectedDoctor.email) {
+         const schedData = await doctorApi.getDoctorSchedule(selectedDoctor.email);
+         setDoctorSchedule(schedData);
+      }
 
       const appointmentsData = await patientApi.getPatientAppointments(currentUser.email);
       setAppointments(appointmentsData);
@@ -127,15 +169,84 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
     message.info("Please cancel this appointment and book a new one.");
   };
 
-  const generateTimeSlots = () => {
-    const slots = ['09:00', '10:00', '11:00', '13:00', '14:00', '15:00', '16:00'];
+  const generateTimelineEvents = () => {
     if (!selectedDate) return [];
     const dateStr = selectedDate.format('YYYY-MM-DD');
-    return slots.map(slot => {
-      const isBooked = appointments.some(a => a.doctor_id === selectedDoctor?.id && a.date === dateStr && a.time === slot && a.status !== 'cancelled');
-      const isBlocked = overrides.some(o => o.date === dateStr && o.start_time <= slot && o.end_time > slot);
-      return { time: slot, available: !isBooked && !isBlocked };
+    const events: any[] = [];
+    
+    // 1. Add Overrides (Surgery/Break)
+    overrides.filter(o => o.date === dateStr).forEach(o => {
+        events.push({
+            type: 'override',
+            time: o.start_time,
+            endTime: o.end_time,
+            title: o.type === 'surgery' ? 'Surgery / Procedure' : 'Doctor Break',
+            reason: o.reason,
+            timestamp: new Date(`${dateStr}T${o.start_time}:00`).getTime(),
+            color: 'red'
+        });
     });
+
+    // 2. Add Standard Slots based on Weekly Schedule
+    const dayOfWeek = selectedDate.day();
+    const scheduleForDay = doctorSchedule.find(s => s.day_of_week === dayOfWeek);
+    
+    let standardSlots: string[] = [];
+    if (doctorSchedule.length === 0) {
+      // Fallback for doctors without a custom schedule
+      standardSlots = ['09:00', '10:00', '11:00', '13:00', '14:00', '15:00', '16:00'];
+    } else if (scheduleForDay) {
+      let currentSlot = dayjs(`${dateStr}T${scheduleForDay.start_time}:00`);
+      const endTime = dayjs(`${dateStr}T${scheduleForDay.end_time}:00`);
+      
+      while (currentSlot.isBefore(endTime) && currentSlot.add(1, 'hour').valueOf() <= endTime.valueOf()) {
+          standardSlots.push(currentSlot.format('HH:mm'));
+          currentSlot = currentSlot.add(1, 'hour');
+      }
+    }
+
+    // Remove slots that have already passed
+    const nowMs = Date.now();
+    standardSlots = standardSlots.filter(slot => {
+       const slotStartMs = new Date(`${dateStr}T${slot}:00`).getTime();
+       return slotStartMs > nowMs;
+    });
+
+    standardSlots.forEach(slot => {
+      const slotStartMs = new Date(`${dateStr}T${slot}:00`).getTime();
+      const slotEndMs = slotStartMs + (60 * 60 * 1000);
+      
+      const isBooked = appointments.some(a => a.doctor_id === selectedDoctor?.id && a.date === dateStr && a.time === slot && a.status !== 'cancelled');
+      
+      const blockingOverride = overrides.find(o => {
+        if (o.date !== dateStr) return false;
+        const surgeryStartMs = new Date(`${dateStr}T${o.start_time}`).getTime();
+        const surgeryEndMs = new Date(`${dateStr}T${o.end_time}`).getTime() + (30 * 60 * 1000);
+        return slotStartMs < surgeryEndMs && slotEndMs > surgeryStartMs;
+      });
+
+      if (isBooked) {
+          events.push({
+            type: 'booked',
+            time: slot,
+            endTime: dayjs(`${dateStr}T${slot}:00`).add(1, 'hour').format('HH:mm'),
+            title: 'Slot Booked',
+            timestamp: slotStartMs,
+            color: 'gray'
+          });
+      } else if (!blockingOverride) {
+          events.push({
+            type: 'available',
+            time: slot,
+            endTime: dayjs(`${dateStr}T${slot}:00`).add(1, 'hour').format('HH:mm'),
+            title: 'Available for Booking',
+            timestamp: slotStartMs,
+            color: 'green'
+          });
+      }
+    });
+
+    return events.sort((a, b) => a.timestamp - b.timestamp);
   };
 
   const handleTogglePermission = async (doctorId: number, checked: boolean) => {
@@ -167,6 +278,8 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
     try {
       await chatApi.sendMessage(formData);
       setMessageInput('');
+      fetchChat(selectedDoctor.id, true);
+      scrollToBottom();
     } catch (e: any) {
       console.error(e);
       message.error(e.message || "Failed to send message");
@@ -199,22 +312,44 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
             <List
               itemLayout="horizontal"
               dataSource={doctors}
-              renderItem={doctor => (
-                <List.Item
-                  className={`px-4 py-4 cursor-pointer transition-colors border-b ${isDarkMode ? 'border-slate-800 hover:bg-slate-800' : 'border-slate-100 hover:bg-slate-50'} ${selectedDoctor?.id === doctor.id ? (isDarkMode ? 'bg-blue-900/20' : 'bg-blue-50') : ''}`}
-                  onClick={() => setSelectedDoctor(doctor)}
-                >
-                  <List.Item.Meta
-                    avatar={
-                      <Badge dot status={doctor.is_online ? 'success' : 'default'} offset={[-5, 35]}>
-                        <Avatar icon={<UserOutlined />} className="bg-blue-100 text-blue-600" size="large" />
-                      </Badge>
-                    }
-                    title={<Text className={`font-semibold ${isDarkMode ? 'text-white' : ''}`}>{doctor.name}</Text>}
-                    description={<Text className="text-xs text-slate-400">{doctor.specialization || 'General Practitioner'}</Text>}
-                  />
-                </List.Item>
-              )}
+              renderItem={doctor => {
+                const unread = unreadCounts[doctor.id] || 0;
+                return (
+                  <List.Item
+                    className={`cursor-pointer transition-colors border-b ${isDarkMode ? 'border-slate-800 hover:bg-slate-800' : 'border-slate-100 hover:bg-slate-50'} ${selectedDoctor?.id === doctor.id ? (isDarkMode ? 'bg-blue-900/20' : 'bg-blue-50') : ''}`}
+                    style={{ padding: '16px 24px' }}
+                    onClick={() => setSelectedDoctor(doctor)}
+                  >
+                    <List.Item.Meta
+                      className="items-center"
+                      avatar={
+                        <Badge dot color={doctor.is_online ? 'green' : 'gray'} offset={[-4, 34]}>
+                          <Avatar size={40} src={`http://localhost:8000/api/profile/picture/${doctor.id}`} className="bg-blue-100 text-blue-600 font-bold text-base">
+                            {doctor.name ? doctor.name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) : 'DR'}
+                          </Avatar>
+                        </Badge>
+                      }
+                      title={<span className={`font-bold text-base block mb-1 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{doctor.name}</span>}
+                      description={
+                        <div className="flex flex-col gap-1">
+                          <span className="text-sm font-medium text-blue-600 dark:text-blue-400">{doctor.specialization || 'General Practitioner'}</span>
+                          <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                            <InfoCircleOutlined className="text-slate-400" />
+                            <span className="truncate max-w-[160px]">{doctor.bio || 'Medical Consultant'}</span>
+                          </span>
+                          <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                            <ClockCircleOutlined className="text-slate-400" />
+                            <span className="truncate max-w-[160px]">{doctor.consultation_hours || 'Consultation hours not set'}</span>
+                          </span>
+                        </div>
+                      }
+                    />
+                    {unread > 0 && (
+                      <Badge count={unread} />
+                    )}
+                  </List.Item>
+                );
+              }}
             />
           )}
         </Card>
@@ -229,28 +364,38 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
           {selectedDoctor ? (
             <>
               {/* Detail Header */}
-              <div className={`p-6 flex items-start gap-4 ${isDarkMode ? 'border-slate-800 bg-slate-900' : 'border-slate-100 bg-white'}`}>
-                <Badge dot status={selectedDoctor.is_online ? 'success' : 'default'} offset={[-5, 50]}>
-                  <Avatar className="bg-blue-100 text-blue-600" icon={<UserOutlined />} size={64} />
+              <div className={`px-4 py-3 flex items-start gap-3 border-b ${isDarkMode ? 'border-slate-800 bg-slate-900' : 'border-slate-100 bg-white'}`}>
+                <Badge dot color={selectedDoctor.is_online ? 'green' : 'gray'} offset={[-4, 30]}>
+                  <Avatar size={36} src={`http://localhost:8000/api/profile/picture/${selectedDoctor.id}`} className="bg-blue-100 text-blue-600 font-bold text-sm mt-0.5">
+                    {selectedDoctor.name ? selectedDoctor.name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) : 'DR'}
+                  </Avatar>
                 </Badge>
-                <div className="flex-1">
-                  <Text className={`text-xl font-bold block ${isDarkMode ? 'text-white' : ''}`}>{selectedDoctor.name}</Text>
-                  <Text className="text-sm text-slate-400 font-semibold">{selectedDoctor.specialization || 'General Practitioner'}</Text>
-                  <div className="flex gap-4 mt-2 text-xs text-slate-500">
-                    {selectedDoctor.clinic_name && <span><EnvironmentOutlined /> {selectedDoctor.clinic_name}</span>}
-                    {selectedDoctor.consultation_hours && <span><ClockCircleOutlined /> {selectedDoctor.consultation_hours}</span>}
-                  </div>
+                <div className="flex-1 min-w-0 flex flex-col justify-start">
+                  <Text className={`font-bold text-sm block leading-tight truncate ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{selectedDoctor.name}</Text>
+                  <Text className="text-[11px] text-slate-500 leading-tight mt-0.5">{selectedDoctor.specialization || 'General Practitioner'}</Text>
                 </div>
               </div>
               
               <Tabs 
                 activeKey={activeTab} 
-                onChange={setActiveTab} 
-                className="px-6 border-b border-slate-100 dark:border-slate-800"
+                onChange={(key) => {
+                  setActiveTab(key);
+                  if (key === 'chat') {
+                    scrollToBottom();
+                  }
+                }} 
+                className="px-4 border-b border-slate-100 dark:border-slate-800"
               >
                 <Tabs.TabPane tab="Overview" key="overview" />
                 <Tabs.TabPane tab="Book Appointment" key="book" />
-                <Tabs.TabPane tab="Consultation Chat" key="chat" />
+                <Tabs.TabPane 
+                  tab={
+                    <Badge count={unreadCounts[selectedDoctor.id] || 0} offset={[10, 0]} size="small">
+                      <span className="mr-2">Consultation Chat</span>
+                    </Badge>
+                  } 
+                  key="chat" 
+                />
               </Tabs>
 
               {/* Tab Contents */}
@@ -259,9 +404,38 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                   <div className="p-6 max-w-3xl space-y-6">
                     <div>
                       <Title level={5} className="!mb-4 text-slate-500">About Doctor</Title>
-                      <Text className="text-slate-600 dark:text-slate-300 leading-relaxed">
+                      <Text className="text-slate-600 dark:text-slate-300 leading-relaxed block mb-4">
                         {selectedDoctor.bio || 'No description provided by the doctor yet.'}
                       </Text>
+                      <div className="grid grid-cols-2 gap-4 bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-100 dark:border-slate-800">
+                        <div>
+                          <Text className="text-xs text-slate-400 block mb-1">Clinic</Text>
+                          <Text className="font-medium">{selectedDoctor.clinic_name || 'Not assigned'}</Text>
+                        </div>
+                        <div>
+                          <Text className="text-xs text-slate-400 block mb-1">Consultation Notes (e.g. Links)</Text>
+                          <Text className="font-medium whitespace-pre-wrap">{selectedDoctor.consultation_hours || 'Not set'}</Text>
+                        </div>
+                        <div>
+                          <Text className="text-xs text-slate-400 block mb-2">Weekly Timetable</Text>
+                          {doctorSchedule.length === 0 ? (
+                            <Text className="text-sm font-medium text-slate-500 italic">Not configured</Text>
+                          ) : (
+                            <div className="space-y-1">
+                              {[...doctorSchedule]
+                                .sort((a, b) => a.day_of_week - b.day_of_week)
+                                .map(s => (
+                                <div key={s.day_of_week} className="flex justify-between text-sm border-b border-slate-50 dark:border-slate-800 pb-1">
+                                  <span className="font-medium text-slate-600 dark:text-slate-300">
+                                    {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][s.day_of_week]}
+                                  </span>
+                                  <span className="text-slate-500">{s.start_time} - {s.end_time}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
 
                     <Divider />
@@ -284,29 +458,58 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                 {activeTab === 'book' && (
                   <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
                     <Card title="Request Appointment" size="small" className="shadow-sm">
+                      <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
+                        <Text className="text-xs text-blue-600 dark:text-blue-400 font-semibold block mb-1"><ClockCircleOutlined /> Doctor's Timetable</Text>
+                        <Text className="text-sm text-blue-800 dark:text-blue-200 whitespace-pre-wrap">{selectedDoctor.consultation_hours || 'Not set'}</Text>
+                      </div>
                       <Form form={bookingForm} layout="vertical" onFinish={handleBookAppointment}>
                         <Form.Item label="Date" name="date" rules={[{ required: true }]}>
                           <DatePicker 
                             className="w-full" 
-                            disabledDate={(current) => current && current < dayjs().endOf('day')}
+                            disabledDate={(current) => current && current < dayjs().startOf('day')}
                             onChange={(date) => { setSelectedDate(date); setSelectedTimeSlot(''); }}
                           />
                         </Form.Item>
                         {selectedDate && (
                           <div className="mb-4">
-                            <Text className="block mb-2">Available Time Slots</Text>
-                            <div className="grid grid-cols-3 gap-2">
-                              {generateTimeSlots().map(slot => (
-                                <Button 
-                                  key={slot.time} 
-                                  type={selectedTimeSlot === slot.time ? 'primary' : 'default'}
-                                  disabled={!slot.available}
-                                  onClick={() => setSelectedTimeSlot(slot.time)}
-                                >
-                                  {slot.time}
-                                </Button>
-                              ))}
+                            <Text className="block mb-4 font-semibold text-slate-600">Daily Schedule Timeline</Text>
+                            <div className="max-h-[300px] overflow-y-auto pr-4 custom-scrollbar">
+                              <Timeline 
+                                items={generateTimelineEvents().map(ev => ({
+                                  color: ev.color,
+                                  children: (
+                                    <div className={`p-3 rounded-lg border flex justify-between items-center transition-all ${
+                                      selectedTimeSlot === ev.time ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-slate-100 hover:border-slate-300'
+                                    }`}>
+                                      <div>
+                                        <Text className="font-semibold block">{ev.time} - {ev.endTime}</Text>
+                                        <Text className={`text-xs ${ev.color === 'red' ? 'text-red-500 font-medium' : 'text-slate-500'}`}>
+                                          {ev.title} {ev.reason && `(${ev.reason})`}
+                                        </Text>
+                                      </div>
+                                      {ev.type === 'available' && (
+                                        <Button 
+                                          type={selectedTimeSlot === ev.time ? 'primary' : 'default'} 
+                                          size="small"
+                                          onClick={() => setSelectedTimeSlot(ev.time)}
+                                        >
+                                          {selectedTimeSlot === ev.time ? 'Selected' : 'Select'}
+                                        </Button>
+                                      )}
+                                      {ev.type === 'override' && (
+                                        <Tag color="red" className="m-0 border-0">Blocked</Tag>
+                                      )}
+                                      {ev.type === 'booked' && (
+                                        <Tag color="default" className="m-0 border-0">Unavailable</Tag>
+                                      )}
+                                    </div>
+                                  )
+                                }))}
+                              />
                             </div>
+                            {generateTimelineEvents().length === 0 && (
+                              <Empty description="No schedule available for this date" />
+                            )}
                           </div>
                         )}
                         <Form.Item label="Notes / Reason for visit" name="notes">
@@ -378,6 +581,13 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                             </div>
                           </div>
                         )}
+                        {firstUnreadMessageId === msg.id && (
+                          <div className="flex items-center my-4">
+                            <div className="flex-1 border-t border-dashed border-red-400"></div>
+                            <div className="mx-4 text-xs font-bold text-red-500 uppercase tracking-widest">Unread Messages</div>
+                            <div className="flex-1 border-t border-dashed border-red-400"></div>
+                          </div>
+                        )}
                         <div className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
                           <div className={`max-w-[70%] rounded-2xl p-3 relative group ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : (isDarkMode ? 'bg-slate-800 text-white rounded-tl-none' : 'bg-white border text-slate-800 rounded-tl-none')}`}>
                             {msg.is_deleted ? (
@@ -388,7 +598,7 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                               {msg.file_name && (
                                 <div className="mt-2">
                                   {msg.file_type?.startsWith('image/') ? (
-                                    <img src={`http://localhost:8000/api/chat/file/${msg.id}`} alt="attachment" className="max-w-full rounded-lg" style={{ maxHeight: 200 }} />
+                                    <Image src={`http://localhost:8000/api/chat/file/${msg.id}`} alt="attachment" className="max-w-full rounded-lg" style={{ maxHeight: 200 }} />
                                   ) : msg.file_type?.startsWith('video/') ? (
                                     <video src={`http://localhost:8000/api/chat/file/${msg.id}`} controls className="max-w-full rounded-lg" style={{ maxHeight: 200 }} />
                                   ) : (
@@ -398,8 +608,18 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                                   )}
                                 </div>
                               )}
-                              <div className={`text-[10px] mt-1 text-right opacity-70`}>
+                              <div className={`text-[10px] mt-1 text-right opacity-70 flex items-center justify-end gap-1`}>
                                 {new Date(msg.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                {isMe && (
+                                  msg.is_read ? (
+                                    <div className="flex" style={{ marginLeft: 2, marginRight: -2 }}>
+                                      <CheckOutlined className="text-blue-200" style={{ fontSize: '10px' }} />
+                                      <CheckOutlined className="text-blue-200" style={{ fontSize: '10px', marginLeft: -4 }} />
+                                    </div>
+                                  ) : (
+                                    <CheckOutlined className="text-slate-300" style={{ fontSize: '10px', marginLeft: 2 }} />
+                                  )
+                                )}
                               </div>
                               {isMe && (
                                 <div className="absolute top-2 -left-8 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -420,6 +640,25 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                   {/* Chat Input */}
                   <div className={`p-4 border-t ${isDarkMode ? 'border-slate-800 bg-slate-900' : 'border-slate-100 bg-white'} shrink-0`}>
                     <div className="flex gap-2 items-center">
+                      <Popover 
+                        content={
+                          <div className="grid grid-cols-4 gap-2">
+                            {['😀', '😂', '😍', '👍', '🙏', '❤️', '🔥', '🎉', '😢', '😡', '🤔', '🙌', '💊', '🏥', '⚕️', '📅'].map(emoji => (
+                              <div 
+                                key={emoji} 
+                                className="cursor-pointer text-xl hover:bg-slate-100 p-2 rounded flex items-center justify-center dark:hover:bg-slate-700"
+                                onClick={() => setMessageInput(prev => prev + emoji)}
+                              >
+                                {emoji}
+                              </div>
+                            ))}
+                          </div>
+                        } 
+                        trigger="click"
+                        placement="topLeft"
+                      >
+                        <Button type="text" icon={<SmileOutlined className="text-xl text-slate-400" />} />
+                      </Popover>
                       <Upload
                         beforeUpload={(file) => {
                           handleSendMessage(file);
@@ -455,13 +694,6 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
           )}
         </Card>
       </Col>
-
-      {/* Notifications Button */}
-      <div className="absolute top-6 right-6 z-10">
-        <Badge count={notifications.filter(n => !n.is_read).length}>
-          <Button shape="circle" icon={<BellOutlined />} onClick={() => setIsNotificationsModalOpen(true)} />
-        </Badge>
-      </div>
 
       <Modal
         title="Notifications"

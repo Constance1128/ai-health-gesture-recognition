@@ -57,6 +57,17 @@ export interface LogEntry {
 
 export type ScreenState = 'IDLE' | 'INSTRUCTION' | 'PREPARATION' | 'COUNTDOWN' | 'SCREENING' | 'FINISHED';
 
+export interface AINotification {
+  id: string;
+  userId: number;
+  title: string;
+  message: string;
+  timestamp: number;
+  isRead: boolean;
+  type: 'warning' | 'error' | 'info';
+  score?: number;
+}
+
 export interface ActiveScreeningHUDProps {
   screenState: ScreenState;
   prepSeconds: number;
@@ -82,6 +93,7 @@ export interface Message {
   file_type: string | null;
   timestamp: number;
   is_deleted: number;
+  is_read: number;
 }
 
 export interface Doctor extends User {

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Response
 from typing import Dict, Any
 
-from database import get_user_by_email, get_all_users, verify_doctor, get_doctor_document
+from database import get_user_by_email, get_all_users, verify_doctor, get_doctor_document, log_audit_action, get_audit_logs
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -27,7 +27,15 @@ def admin_verify_doctor(request: Dict[str, Any]):
     if not success:
         raise HTTPException(status_code=500, detail="Failed to verify doctor.")
         
+    log_audit_action(user["id"], "Verified Doctor", f"Doctor ID: {doctor_id}")
     return {"message": "Doctor verified successfully."}
+
+@router.get("/audit-logs")
+def admin_get_audit_logs(email: str):
+    user = get_user_by_email(email)
+    if not user or user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Unauthorized access.")
+    return get_audit_logs()
 
 @router.get("/view-document/{doctor_id}")
 def view_document(doctor_id: int):

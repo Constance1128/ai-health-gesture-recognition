@@ -42,7 +42,6 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
   const screenStateRef = useRef<ScreenState>(screenState);
   const [humanLoading, setHumanLoading] = useState(true);
 
-  // Keep screenStateRef in sync so render loop can use it without stale closure
   useEffect(() => {
     screenStateRef.current = screenState;
     // When SCREENING begins, reset snapshot accumulator
@@ -51,13 +50,18 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
       hasSavedRef.current = 0;
     }
     // When FINISHED, pass collected snapshots up
-    // When FINISHED, pass collected snapshots up, but ONLY if we actually collected them
     if (screenState === 'FINISHED' && onSnapshotsCollected && angleSnapshotsRef.current.length > 0) {
-      onSnapshotsCollected(angleSnapshotsRef.current);
-      // Clear them so we don't accidentally send them again if the component remounts
+      const snapsToSend = angleSnapshotsRef.current;
+      // DEBUG: log wrist data to diagnose tremor detection
+      const sample = snapsToSend[0];
+      console.log('[SkeletalFeed] FINISHED → snapshots:', snapsToSend.length,
+        '| lWrist[0]:', sample?.leftWrist?.x?.toFixed(4), sample?.leftWrist?.y?.toFixed(4),
+        '| rWrist[0]:', sample?.rightWrist?.x?.toFixed(4), sample?.rightWrist?.y?.toFixed(4),
+        '| analysisResult mode:', analysisResultRef.current?.mode);
+      onSnapshotsCollected(snapsToSend);
       angleSnapshotsRef.current = [];
     }
-  }, [screenState]);
+  }, [screenState, onSnapshotsCollected]);
 
   useEffect(() => {
     analysisResultRef.current = analysisResult;
@@ -392,7 +396,7 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
       isCancelled = true;
       cancelAnimationFrame(animationFrameId);
     };
-  }, [activeMode, cameraActive, backendConnected, screenState, currentUser, calibrationMode]);
+  }, [activeMode, cameraActive, backendConnected, screenState, currentUser, calibrationMode, sessionId]);
 
   // UI HUD Drawings
   const drawPreparationGuide = (ctx: CanvasRenderingContext2D, w: number, h: number) => {

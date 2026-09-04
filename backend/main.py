@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 import os
 
 # Import split route modules
-from routes import auth, analysis, admin, doctor, chat
+from routes import auth, analysis, admin, doctor, chat, content
 from database import init_db
 from pose_tracker import HAS_MEDIAPIPE
 
@@ -49,6 +49,7 @@ app.include_router(analysis.router)
 app.include_router(admin.router)
 app.include_router(doctor.router)
 app.include_router(chat.router)
+app.include_router(content.router)
 
 # Trigger reload to execute database migrations
 if __name__ == "__main__":

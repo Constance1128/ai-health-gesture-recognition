@@ -139,7 +139,12 @@ def login_user(credentials: UserLogin):
         "birthday": user["birthday"],
         "email": user["email"],
         "role": user["role"],
-        "is_verified": user["is_verified"]
+        "is_verified": user["is_verified"],
+        "specialization": user.get("specialization"),
+        "medical_license": user.get("medical_license"),
+        "bio": user.get("bio"),
+        "clinic_name": user.get("clinic_name"),
+        "consultation_hours": user.get("consultation_hours")
     }
 
 @router.post("/forgot-password")

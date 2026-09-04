@@ -232,6 +232,36 @@ def init_db():
             )
         """)
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS faqs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                question TEXT NOT NULL,
+                answer TEXT NOT NULL,
+                category TEXT NOT NULL,
+                timestamp REAL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS articles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                author_id INTEGER NOT NULL,
+                timestamp REAL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT NOT NULL,
+                timestamp REAL
+            )
+        """)
+
         conn.commit()
         # Database Migration: Add is_online column to users if it doesn't exist
         try:
@@ -304,7 +334,7 @@ def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
         conn = sqlite3.connect(DB_FILE, timeout=30.0)
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, name, gender, age, birthday, email, password, role, specialization, medical_license, is_verified FROM users WHERE email = ?
+            SELECT id, name, gender, age, birthday, email, password, role, specialization, medical_license, is_verified, bio, clinic_name, consultation_hours FROM users WHERE email = ?
         """, (email.lower(),))
         row = cursor.fetchone()
         if row:
@@ -322,7 +352,10 @@ def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
                 "specialization": row[8],
                 "medical_license": row[9],
                 "verification_document": f"/api/admin/view-document/{user_id}" if role_val == 'professional' else None,
-                "is_verified": row[10] if row[10] is not None else 0
+                "is_verified": row[10] if row[10] is not None else 0,
+                "bio": row[11],
+                "clinic_name": row[12],
+                "consultation_hours": row[13]
             }
         return None
     except Exception as e:
@@ -703,7 +736,8 @@ def get_doctors_for_patient(patient_id: int) -> List[Dict[str, Any]]:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT u.id, u.name, u.specialization, u.is_online,
-                   CASE WHEN dp.doctor_id IS NOT NULL THEN 1 ELSE 0 END AS has_permission
+                   CASE WHEN dp.doctor_id IS NOT NULL THEN 1 ELSE 0 END AS has_permission,
+                   u.bio, u.clinic_name, u.consultation_hours, u.email
             FROM users u
             LEFT JOIN doctor_permissions dp ON u.id = dp.doctor_id AND dp.patient_id = ?
             WHERE u.role = 'professional' AND u.is_verified = 1
@@ -718,7 +752,11 @@ def get_doctors_for_patient(patient_id: int) -> List[Dict[str, Any]]:
                 "name": r[1],
                 "specialization": r[2],
                 "is_online": r[3],
-                "has_permission": bool(r[4])
+                "has_permission": bool(r[4]),
+                "bio": r[5],
+                "clinic_name": r[6],
+                "consultation_hours": r[7],
+                "email": r[8]
             })
         return doctors
     except Exception as e:
@@ -805,7 +843,7 @@ def get_chat_history(user1_id: int, user2_id: int) -> List[Dict[str, Any]]:
         conn = sqlite3.connect(DB_FILE, timeout=30.0)
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, sender_id, receiver_id, content, file_name, file_type, timestamp, is_deleted
+            SELECT id, sender_id, receiver_id, content, file_name, file_type, timestamp, is_deleted, is_read
             FROM messages
             WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)
             ORDER BY timestamp ASC
@@ -822,7 +860,8 @@ def get_chat_history(user1_id: int, user2_id: int) -> List[Dict[str, Any]]:
                 "file_name": r[4] if not r[7] else None,
                 "file_type": r[5] if not r[7] else None,
                 "timestamp": r[6],
-                "is_deleted": r[7]
+                "is_deleted": r[7],
+                "is_read": r[8]
             })
         return messages
     except Exception as e:
@@ -1151,11 +1190,10 @@ def get_notifications(user_id: int) -> List[Dict[str, Any]]:
         if conn:
             conn.close()
 
-def get_unread_message_counts(user_id: int) -> List[Dict[str, Any]]:
+def get_unread_message_counts(user_id: int) -> Dict[int, int]:
     conn = None
     try:
         conn = sqlite3.connect(DB_FILE, timeout=30.0)
-        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("""
             SELECT sender_id, COUNT(*) as unread_count 
@@ -1163,10 +1201,14 @@ def get_unread_message_counts(user_id: int) -> List[Dict[str, Any]]:
             WHERE receiver_id = ? AND is_read = 0 
             GROUP BY sender_id
         """, (user_id,))
-        return [dict(row) for row in cursor.fetchall()]
+        
+        counts = {}
+        for row in cursor.fetchall():
+            counts[row[0]] = row[1]
+        return counts
     except Exception as e:
         print(f"Error getting unread counts: {e}")
-        return []
+        return {}
     finally:
         if conn:
             conn.close()
@@ -1184,8 +1226,142 @@ def mark_messages_read(user_id: int, sender_id: int) -> bool:
         conn.commit()
         return True
     except Exception as e:
-        print(f"Error marking messages read: {e}")
+        print(f"Error marking messages as read: {e}")
         return False
+    finally:
+        if conn:
+            conn.close()
+
+# ----------------- Content Management & Audit Logs (FYP Missing Features) -----------------
+
+def create_faq(question: str, answer: str, category: str) -> bool:
+    conn = None
+    import time
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO faqs (question, answer, category, timestamp) VALUES (?, ?, ?, ?)",
+            (question, answer, category, time.time())
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error creating FAQ: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def get_faqs() -> List[Dict[str, Any]]:
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM faqs ORDER BY timestamp DESC")
+        return [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        print(f"Error getting FAQs: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+def delete_faq(faq_id: int) -> bool:
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM faqs WHERE id = ?", (faq_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error deleting FAQ: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def create_article(title: str, content: str, author_id: int) -> bool:
+    conn = None
+    import time
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO articles (title, content, author_id, timestamp) VALUES (?, ?, ?, ?)",
+            (title, content, author_id, time.time())
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error creating article: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def get_articles() -> List[Dict[str, Any]]:
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM articles ORDER BY timestamp DESC")
+        return [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        print(f"Error getting articles: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+def delete_article(article_id: int) -> bool:
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM articles WHERE id = ?", (article_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error deleting article: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def log_audit_action(admin_id: int, action: str, target: str) -> bool:
+    conn = None
+    import time
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO audit_logs (admin_id, action, target, timestamp) VALUES (?, ?, ?, ?)",
+            (admin_id, action, target, time.time())
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error logging audit action: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def get_audit_logs() -> List[Dict[str, Any]]:
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM audit_logs ORDER BY timestamp DESC")
+        return [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        print(f"Error getting audit logs: {e}")
+        return []
     finally:
         if conn:
             conn.close()

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Layout, Avatar, Button, Switch, Typography, Modal, Form, Input } from 'antd';
-import { HeartOutlined, UserOutlined, LogoutOutlined, LockOutlined, KeyOutlined } from '@ant-design/icons';
+import { Layout, Avatar, Button, Switch, Typography, Modal, Form, Input, Popover, Badge } from 'antd';
+import { HeartOutlined, UserOutlined, LogoutOutlined, LockOutlined, KeyOutlined, BellOutlined, CheckOutlined, DeleteOutlined } from '@ant-design/icons';
 import { DashboardHeaderProps } from '../types';
+import { useNotifications } from '../contexts/NotificationContext';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -15,6 +16,10 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [form] = Form.useForm();
+  
+  // Use notifications context safely, fallback if used outside provider (though we wrapped it)
+  const notificationsCtx = useNotifications();
+  const { notifications, markAllAsRead, clearAll, unreadCount } = notificationsCtx || { notifications: [], markAllAsRead: ()=>{}, clearAll: ()=>{}, unreadCount: 0 };
 
   const onChangePasswordFinish = async (values: any) => {
     if (handleChangePassword) {
@@ -52,6 +57,55 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
             </div>
             
             <div className="flex gap-1">
+              <Popover
+                content={
+                  <div className="w-80 max-h-96 flex flex-col">
+                    <div className="flex justify-between items-center mb-2 px-2 pb-2 border-b dark:border-slate-700">
+                      <span className="font-bold text-sm">Notifications</span>
+                      <div className="space-x-2">
+                        <Button type="link" size="small" onClick={markAllAsRead} className="text-xs p-0 h-auto" icon={<CheckOutlined />}>Mark read</Button>
+                        <Button type="link" size="small" danger onClick={clearAll} className="text-xs p-0 h-auto" icon={<DeleteOutlined />}>Clear</Button>
+                      </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-1">
+                      {notifications.length === 0 ? (
+                        <div className="text-center py-8 text-slate-400 text-xs">No notifications</div>
+                      ) : (
+                        <div className="space-y-2">
+                          {notifications.map(notif => (
+                            <div key={notif.id} className={`p-3 rounded-lg border ${!notif.isRead ? 'bg-blue-50/50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-800' : 'bg-transparent border-slate-100 dark:border-slate-800'}`}>
+                              <div className="flex justify-between items-start mb-1">
+                                <span className={`text-xs font-bold ${notif.type === 'error' ? 'text-rose-500' : notif.type === 'warning' ? 'text-amber-500' : 'text-blue-500'}`}>{notif.title}</span>
+                                <span className="text-[10px] text-slate-400">{new Date(notif.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                              </div>
+                              <p className="text-xs text-slate-600 dark:text-slate-300 m-0 leading-snug">{notif.message}</p>
+                              {notif.score !== undefined && (
+                                <div className="mt-2 text-[10px] font-semibold">
+                                  Score: <span className={notif.score < 70 ? 'text-rose-500' : 'text-emerald-500'}>{notif.score.toFixed(1)}/100</span>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                }
+                trigger="click"
+                placement="bottomRight"
+                overlayInnerStyle={{ padding: '12px' }}
+              >
+                <Badge count={unreadCount} size="small" offset={[-2, 2]}>
+                  <Button 
+                    type="text" 
+                    icon={<BellOutlined />} 
+                    size="small"
+                    className={`flex items-center justify-center ${isDarkMode ? 'text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/10' : 'text-slate-500 hover:text-emerald-500 hover:bg-emerald-50'}`}
+                    title="Notifications"
+                  />
+                </Badge>
+              </Popover>
+
               <Button 
                 type="text" 
                 icon={<KeyOutlined />} 

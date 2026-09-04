@@ -402,63 +402,95 @@ export function generateDiagnosis(snapshots: PostureSnapshot[], analysisResult: 
       });
     }
 
-    // ── Parkinson's Disease (tremor model feeds this via backend) ─
-    // This is primarily detected by the backend Swin Transformer.
+    // ── Parkinson's Disease ─────────────────────────────────────────────
+    // Computed PURELY from the 50ms wrist snapshots collected during this session.
+    // We do NOT inherit backend.tremor_prob here because the backend session history
+    // accumulates old frames across multiple assessments and produces false positives.
     let frontendTremorScoreOverride: number | undefined = undefined;
+    let tremorProb = 0; // Always start fresh — never inherit backend value
+    const backendTremorProb = analysisResult?.metrics?.tremor_prob || 0;
+    const statusText = (analysisResult?.status || '').toLowerCase();
 
-    if (analysisResult && analysisResult.metrics) {
-      let tremorProb = analysisResult.metrics.tremor_prob || 0;
+    if (snapshots.length > 4) {
+      const calcVar = (arr: number[]) => {
+        if (arr.length === 0) return 0;
+        const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+        return arr.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / arr.length;
+      };
 
-      // FRONTEND MOTION GATE
-      // The backend TensorFlow model sometimes hallucinates 100% tremor when perfectly still.
-      // If the user hasn't restarted their backend, we catch it here.
-      if (snapshots.length > 5) {
-        const calcVar = (arr: number[]) => {
-          const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
-          return arr.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / arr.length;
-        };
+      // Filter out frames where wrist isn't visible (coordinate = 0 means MediaPipe missed it)
+      const lxRaw = snapshots.map(s => s.leftWrist?.x ?? 0);
+      const lyRaw = snapshots.map(s => s.leftWrist?.y ?? 0);
+      const rxRaw = snapshots.map(s => s.rightWrist?.x ?? 0);
+      const ryRaw = snapshots.map(s => s.rightWrist?.y ?? 0);
 
-        const lx = snapshots.map(s => s.leftWrist?.x || 0);
-        const ly = snapshots.map(s => s.leftWrist?.y || 0);
-        const rx = snapshots.map(s => s.rightWrist?.x || 0);
-        const ry = snapshots.map(s => s.rightWrist?.y || 0);
+      const lValid = lxRaw.filter(v => v > 0.01).length;
+      const rValid = rxRaw.filter(v => v > 0.01).length;
 
-        const maxVar = Math.max(calcVar(lx), calcVar(ly), calcVar(rx), calcVar(ry));
+      // Use the wrist that has more valid readings
+      const lx = lxRaw.filter(v => v > 0.01);
+      const ly = lyRaw.filter(v => v > 0.01);
+      const rx = rxRaw.filter(v => v > 0.01);
+      const ry = ryRaw.filter(v => v > 0.01);
 
-        // Calculate average shoulder width across snapshots to determine distance from camera
-        let sumShoulderWidth = 0;
-        let validShoulderFrames = 0;
-        snapshots.forEach(s => {
-          if (s.leftShoulder && s.rightShoulder) {
-            sumShoulderWidth += Math.abs(s.leftShoulder.x - s.rightShoulder.x);
-            validShoulderFrames++;
-          }
-        });
-        const avgShoulderWidth = validShoulderFrames > 0 ? sumShoulderWidth / validShoulderFrames : 0;
+      const lVarX = calcVar(lx), lVarY = calcVar(ly);
+      const rVarX = calcVar(rx), rVarY = calcVar(ry);
 
-        // 1. If perfectly still, ignore tremor (removes standing false positives)
-        // 2. If standing far away (full body mode), ignore tremor (camera resolution too low for accurate hand-shake detection)
-        if (maxVar < 0.0001 || avgShoulderWidth < 0.25) {
-          tremorProb = 0;
-        } else if (maxVar > 0.0005) {
-          // Fallback: If variance is high (vigorous shake up close), force tremor detection
-          // to bypass the backend's flawed threshold logic.
-          if (tremorProb < 0.7) tremorProb = 0.7;
+      // Use the MAX variance across both wrists and both axes.
+      // Parkinson's tremor typically appears in X (side-to-side) OR Y (up-down)
+      // whichever is dominant. We take the worst case.
+      const maxVar = Math.max(lVarX, lVarY, rVarX, rVarY);
+
+      // Velocity logic (acceleration variance) to filter out smooth macro-movements
+      const calcVelVar = (arr: number[]) => {
+        if (arr.length < 2) return 0;
+        const diffs = [];
+        for (let i = 1; i < arr.length; i++) {
+          diffs.push(arr[i] - arr[i - 1]);
         }
+        return calcVar(diffs);
+      };
+
+      const lAccX = calcVelVar(lx), lAccY = calcVelVar(ly);
+      const rAccX = calcVelVar(rx), rAccY = calcVelVar(ry);
+
+      // We take the max acceleration variance. Smooth movements have 0 acceleration variance.
+      const maxAcc = Math.max(lAccX, lAccY, rAccX, rAccY);
+
+      // DEBUG — visible in browser DevTools console
+      console.log('[TremorDetect] snapshots:', snapshots.length,
+        '| maxVar (spatial):', maxVar.toFixed(6),
+        '| maxAcc (velocity var):', maxAcc.toFixed(6),
+        '| sessionMaxTremorProb:', (analysisResult?.metrics?.session_max_tremor_prob || 0).toFixed(3));
+
+      // A normal resting tremor is around 4-6 Hz. Waving your hand is < 1 Hz.
+      // 0.0150 filters out macro-movements like waving or adjusting the camera.
+      if (maxAcc >= 0.0150) {
+        tremorProb = Math.min(0.92, Math.max(0.68, 0.68 + ((maxAcc - 0.0150) / 0.02) * 0.24));
       }
 
-      if (tremorProb > 0.25) {
-        conditions.push({
-          name: tremorProb > 0.6 ? "Parkinson's Disease / Essential Tremor" : "Parkinson's Disease (Possible)",
-          risk: tremorProb > 0.6 ? 'high' : tremorProb > 0.4 ? 'moderate' : 'low',
-          probability: Math.round(tremorProb * 100),
-          description: tremorProb > 0.6
-            ? 'High-frequency tremor patterns detected matching Parkinsonian signatures or Essential Tremor. Immediate clinical assessment is advised.'
-            : 'Mild resting tremor patterns detected. Neurological assessment is recommended to rule out early-stage Parkinson\'s.',
-        });
+      // Secondary signal: if backend detected high tremor during this session
+      // (stored as session_max_tremor_prob injected by LiveDetectionPanel),
+      // use it as a floor to ensure shaking is never missed
+      const sessionMaxBackend = analysisResult?.metrics?.session_max_tremor_prob || 0;
+      if (sessionMaxBackend >= 0.55 && tremorProb < 0.68) {
+        // Backend confidence, downweighted to avoid false positives
+        tremorProb = Math.max(tremorProb, sessionMaxBackend * 0.75);
       }
+    } else if (analysisResult?.mode === 'tremor') {
+      // Fallback for tremor-mode only: use backend value directly
+      tremorProb = backendTremorProb;
+    }
 
-      frontendTremorScoreOverride = Math.max(0, 100 - (tremorProb * 80.0));
+    if (tremorProb > 0.35) {
+      conditions.push({
+        name: "Parkinson's Disease (Resting Tremor)",
+        risk: tremorProb > 0.65 ? 'high' : 'moderate',
+        probability: Math.round(tremorProb * 100),
+        description: 'Involuntary oscillatory tremor detected in wrist/hand motion. Pattern matches Parkinsonian resting tremor characteristics. Clinical neurological evaluation is recommended.',
+      });
+
+      frontendTremorScoreOverride = Math.max(25, Math.round(100 - (tremorProb * 65.0)));
     }
 
     // ── Cerebral Palsy Indicators ────────────────────────────
@@ -475,9 +507,9 @@ export function generateDiagnosis(snapshots: PostureSnapshot[], analysisResult: 
       });
     }
 
-    // ── Essential Tremor (elbow angle variance proxy) ─────────
-    // Since we don't have raw temporal data at this level, we check elbow angle spread
-    if (avgElbowDiff > 20 && avgShoulderAsymmetry < 3) {
+    // ── Essential Tremor (elbow variance proxy) ──────────────────────────
+    // Only show if NOT already diagnosed as Parkinson's (which is higher-confidence)
+    if (avgElbowDiff > 20 && avgShoulderAsymmetry < 3 && tremorProb < 0.35) {
       conditions.push({
         name: 'Essential Tremor (Possible)',
         risk: 'low',
@@ -486,10 +518,160 @@ export function generateDiagnosis(snapshots: PostureSnapshot[], analysisResult: 
       });
     }
 
-    // ── Parkinson's Disease (tremor model feeds this via backend) ─
-    // This is primarily detected by the backend Swin Transformer.
-    // If analysisResult indicates high tremor score, it appears in the conditions.
-    // (Handled separately by the backend AI — see analysisResult.tremor_score)
+    // ── Muscular Dystrophy Indicators ────────────────────────────────
+    const mdRisk = clamp(Math.round((avgShoulderAsymmetry * 2) + (avgElbowDiff * 1.5) + (avgSpineAngle * 3)), 0, 100);
+    if (mdRisk > 30 && avgShoulderAsymmetry > 2 && avgElbowDiff > 10 && avgHipTilt > 1.5) {
+      conditions.push({
+        name: 'Muscular Dystrophy / Proximal Weakness',
+        risk: mdRisk > 60 ? 'high' : mdRisk > 40 ? 'moderate' : 'low',
+        probability: mdRisk,
+        description: 'Symmetric proximal muscle weakness pattern detected — drooping shoulders, limited elbow extension, and trunk lean. May be consistent with progressive muscular dystrophy. Neuromuscular specialist evaluation needed.',
+      });
+    }
+
+    // ── Multiple Sclerosis Motor Signs ──────────────────────────────
+    const msRisk = clamp(Math.round((avgShoulderAsymmetry * 3) + (avgKneeDiff * 2) + (avgElbowDiff * 1.5) + (avgHipTilt * 2)), 0, 100);
+    if (msRisk > 35 && avgShoulderAsymmetry > 2.5 && avgKneeDiff > 8) {
+      conditions.push({
+        name: 'Multiple Sclerosis Motor Signs (Possible)',
+        risk: msRisk > 60 ? 'high' : 'moderate',
+        probability: msRisk,
+        description: 'Asymmetric upper and lower limb motor discrepancy detected. This pattern may reflect demyelination-related motor dysfunction. Brain and spinal MRI required to rule out MS.',
+      });
+    }
+
+    // ── Rheumatoid Arthritis ────────────────────────────────────────
+    const raRisk = clamp(Math.round((avgElbowDiff * 3) + (avgShoulderAsymmetry * 2)), 0, 100);
+    if (raRisk > 30 && avgElbowDiff > 15) {
+      conditions.push({
+        name: 'Rheumatoid Arthritis / Inflammatory Arthropathy',
+        risk: raRisk > 60 ? 'high' : 'moderate',
+        probability: raRisk,
+        description: 'Significant asymmetric restriction in elbow and shoulder joint range-of-motion. Joint inflammation consistent with inflammatory arthritis. Rheumatology referral recommended.',
+      });
+    }
+
+    // ── Torticollis / Cervical Radiculopathy ───────────────────────
+    const torticollisRisk = clamp(Math.round((avgHeadOffset * 8) + (avgShoulderAsymmetry * 4)), 0, 100);
+    if (torticollisRisk > 30 && avgHeadOffset > 3 && avgShoulderAsymmetry > 2) {
+      conditions.push({
+        name: 'Torticollis / Cervical Radiculopathy',
+        risk: torticollisRisk > 60 ? 'high' : 'moderate',
+        probability: torticollisRisk,
+        description: 'Head lateral tilt combined with unilateral shoulder elevation detected. May indicate muscle spasm (torticollis) or nerve root compression in the cervical spine.',
+      });
+    }
+
+    // ── Spinal Stenosis ──────────────────────────────────────────
+    const stenosisRisk = clamp(Math.round((avgSpineAngle * 6) + (avgHipTilt * 5)), 0, 100);
+    if (stenosisRisk > 35 && avgSpineAngle > 4 && avgHipTilt > 2.5) {
+      conditions.push({
+        name: 'Spinal Stenosis / Lumbar Instability',
+        risk: stenosisRisk > 65 ? 'high' : 'moderate',
+        probability: stenosisRisk,
+        description: 'Forward trunk lean with compensatory hip tilt detected — a common adaptation to spinal canal narrowing. Lumbar MRI and orthopaedic spine consultation recommended.',
+      });
+    }
+
+    // ── Shoulder Impingement Syndrome ─────────────────────────────
+    const impingementRisk = clamp(Math.round((avgShoulderAsymmetry * 6) + (avgElbowDiff * 2)), 0, 100);
+    if (impingementRisk > 30 && avgShoulderAsymmetry > 2.5 && avgElbowDiff > 12) {
+      conditions.push({
+        name: 'Shoulder Impingement Syndrome',
+        risk: impingementRisk > 60 ? 'high' : 'moderate',
+        probability: impingementRisk,
+        description: 'Elevated shoulder with restricted ipsilateral arm motion detected. May indicate rotator cuff impingement or subacromial bursitis. Ultrasound and physiotherapy assessment recommended.',
+      });
+    }
+
+    // ── Build Illness / Syndrome Findings into findings array ──────
+    const illnessFindings: PostureFinding[] = [];
+
+    // Parkinson's / Tremor — only show when conditions section is also triggered (> 0.35)
+    if (tremorProb > 0.35 || statusText.includes('parkinson')) {
+      const tremorFreq = analysisResult?.metrics?.tremor_freq || analysisResult?.metrics?.frequency_hz || 5.0;
+      const isParkinsons = statusText.includes('parkinson') || (tremorFreq >= 3.0 && tremorFreq <= 6.5);
+
+      if (isParkinsons) {
+        illnessFindings.push({
+          id: 'parkinsons-disease',
+          severity: tremorProb > 0.5 ? 'severe' : 'moderate',
+          label: "Parkinson's Disease (Resting Tremor)",
+          affectedArea: 'Neurological / Motor Control',
+          description: `Resting tremor detected (${tremorFreq > 0 ? `${tremorFreq.toFixed(1)} Hz` : '4-6 Hz range'}) in hands/wrists, matching Parkinsonian motor symptoms.`
+        });
+      } else {
+        illnessFindings.push({
+          id: 'essential-tremor',
+          severity: tremorProb > 0.6 ? 'severe' : 'moderate',
+          label: 'Essential Tremor (Action Tremor)',
+          affectedArea: 'Neurological / Motor Control',
+          description: `Tremor oscillations detected (${tremorFreq > 0 ? `${tremorFreq.toFixed(1)} Hz` : 'high frequency'}) during active posture holding.`
+        });
+      }
+    }
+
+    // Stroke / Hemiplegia
+    if (hemiplegiaRisk > 35 || (analysisResult?.status && (analysisResult.status.toLowerCase().includes('stroke') || analysisResult.status.toLowerCase().includes('hemiplegia')))) {
+      illnessFindings.push({
+        id: 'stroke-hemiplegia',
+        severity: hemiplegiaRisk > 60 ? 'severe' : 'moderate',
+        label: 'Stroke / Hemiplegia Syndrome',
+        affectedArea: 'Bilateral Symmetry / Motor Function',
+        description: 'Significant unilateral asymmetry and movement lag detected between left and right sides.'
+      });
+    }
+
+    // Scoliosis
+    if (scoliosisRisk > 30 || (analysisResult?.status && analysisResult.status.toLowerCase().includes('scoliosis'))) {
+      illnessFindings.push({
+        id: 'scoliosis-syndrome',
+        severity: scoliosisRisk > 60 ? 'severe' : 'moderate',
+        label: 'Scoliosis (Spinal Curvature)',
+        affectedArea: 'Spine / Musculoskeletal',
+        description: 'Lateral spinal curvature and shoulder/pelvic height asymmetry detected.'
+      });
+    }
+
+    // Kyphosis
+    if (kyphosisRisk > 30 || (analysisResult?.status && analysisResult.status.toLowerCase().includes('kyphosis'))) {
+      illnessFindings.push({
+        id: 'kyphosis-syndrome',
+        severity: kyphosisRisk > 60 ? 'severe' : 'moderate',
+        label: 'Postural Kyphosis (Hunchback)',
+        affectedArea: 'Thoracic Spine / Shoulders',
+        description: 'Excessive thoracic curvature and forward rounded shoulder posture detected.'
+      });
+    }
+
+    // Text Neck
+    if (fhpRisk > 35 || (analysisResult?.status && analysisResult.status.toLowerCase().includes('text neck'))) {
+      illnessFindings.push({
+        id: 'text-neck-syndrome',
+        severity: fhpRisk > 65 ? 'severe' : 'moderate',
+        label: 'Text Neck Syndrome',
+        affectedArea: 'Cervical Spine / Neck',
+        description: 'Significant downward head tilt and cervical spine misalignment detected.'
+      });
+    }
+
+    // Cerebral Palsy
+    if (cpRisk > 45 || (analysisResult?.status && analysisResult.status.toLowerCase().includes('cerebral palsy'))) {
+      illnessFindings.push({
+        id: 'cerebral-palsy',
+        severity: cpRisk > 65 ? 'severe' : 'moderate',
+        label: 'Cerebral Palsy / Spasticity Indicators',
+        affectedArea: 'Multilateral Joint Coordination',
+        description: 'Irregular asymmetric joint movement patterns detected across multiple limbs.'
+      });
+    }
+
+    // Add illness findings to the top of findings array!
+    if (illnessFindings.length > 0) {
+      const cleanFindings = findings.filter(f => f.id !== 'normal-posture');
+      findings.length = 0;
+      findings.push(...illnessFindings, ...cleanFindings);
+    }
 
     // ── 5. Build measurements ────────────────────────────────
     const measurements: JointAngleMeasurement[] = [];
@@ -526,6 +708,9 @@ export function generateDiagnosis(snapshots: PostureSnapshot[], analysisResult: 
     let penalty = 0;
     findings.forEach(f => { if (f.id !== 'normal-posture') penalty += severityPenalty[f.severity]; });
     let score = clamp(100 - penalty, 0, 100);
+    if (analysisResult && analysisResult.metrics && analysisResult.metrics.final_score !== undefined) {
+      score = analysisResult.metrics.final_score;
+    }
 
     if (frontendTremorScoreOverride !== undefined) {
       score = Math.min(score, frontendTremorScoreOverride);
@@ -542,14 +727,46 @@ export function generateDiagnosis(snapshots: PostureSnapshot[], analysisResult: 
       ? 'Your posture analysis shows no significant abnormalities. Body alignment, shoulder symmetry, and spinal curvature are all within normal clinical ranges.'
       : `The AI detected ${abnormalFindings.length} area${abnormalFindings.length > 1 ? 's' : ''} of concern: ${abnormalFindings.map(f => f.label).join(', ')}. These findings are based on ${snapshots.length} frames of movement analysis.`;
 
+    // Per-condition clinical recommendations
+    const recLines: string[] = ['⚠️ AI screening estimate only — NOT a medical diagnosis. Consult a licensed healthcare professional.'];
+    if (tremorProb > 0.35)
+      recLines.push('🧠 NEUROLOGIST (Urgent): Resting tremor detected. Evaluation for Parkinson\'s Disease, Essential Tremor, or drug-induced tremor required. Request DaTscan and motor assessment.');
+    if (hemiplegiaRisk > 35)
+      recLines.push('🧠 NEUROLOGIST: Significant bilateral asymmetry. Brain MRI and functional neurological assessment recommended to rule out stroke / hemiplegia.');
+    if (scoliosisRisk > 30)
+      recLines.push('🦴 ORTHOPAEDIC SURGEON: Lateral spinal curvature detected. Full-spine X-ray (Cobb angle) recommended. Severe scoliosis may require bracing or surgery.');
+    if (kyphosisRisk > 30)
+      recLines.push('🦴 PHYSIOTHERAPIST: Forward thoracic rounding detected. Back extensor strengthening and scapular retraction exercises recommended. Ergonomic assessment advised.');
+    if (lordosisRisk > 25)
+      recLines.push('🦴 PHYSIOTHERAPIST: Excessive lumbar arch. Core stabilization, hip flexor stretching, postural retraining. Lumbar X-ray to rule out spondylolisthesis.');
+    if (fhpRisk > 35)
+      recLines.push('👨‍⚕️ PHYSIOTHERAPIST / CHIROPRACTOR: Forward head posture (Text Neck). Cervical traction, deep neck flexor exercises, and workstation ergonomic adjustment recommended.');
+    if (frozenShoulderRisk > 25 && avgElbowDiff > 15)
+      recLines.push('🦴 ORTHOPAEDIC / PHYSIOTHERAPIST: Restricted shoulder ROM detected. Ultrasound imaging of rotator cuff. Physiotherapy mobilization and corticosteroid injection may be indicated.');
+    if (knockKneeRisk > 25)
+      recLines.push('🦴 ORTHOPAEDIC: Knee alignment anomaly. Full-leg standing X-ray, gait analysis, and orthopaedic review. Orthotics or corrective bracing may be required.');
+    if (cpRisk > 40)
+      recLines.push('🧠 PAEDIATRIC NEUROLOGIST / REHAB SPECIALIST: Multi-limb spasticity pattern. Neurological evaluation, occupational therapy, and physiotherapy assessment recommended.');
+    if (mdRisk > 30 && avgElbowDiff > 10)
+      recLines.push('🧬 NEUROMUSCULAR SPECIALIST: Proximal weakness pattern. Creatine kinase (CK) blood test, EMG/nerve conduction study, and possible muscle biopsy referral.');
+    if (msRisk > 35 && avgKneeDiff > 8)
+      recLines.push('🧠 NEUROLOGIST: Asymmetric motor signs detected. Brain and spinal MRI with contrast, evoked potential studies, and CSF analysis to evaluate for Multiple Sclerosis.');
+    if (raRisk > 30 && avgElbowDiff > 15)
+      recLines.push('🩺 RHEUMATOLOGIST: Inflammatory arthritis pattern. Anti-CCP, CRP, ESR, and rheumatoid factor blood tests recommended. Early treatment prevents joint destruction.');
+    if (torticollisRisk > 30 && avgHeadOffset > 3)
+      recLines.push('🦴 PHYSIOTHERAPIST / SPINE SPECIALIST: Cervical misalignment. Cervical X-ray and MRI to rule out disc herniation. Manual therapy and neck stabilization exercises recommended.');
+    if (stenosisRisk > 35)
+      recLines.push('🦴 SPINE SURGEON: Forward lean and hip compensation. Lumbar MRI, neurodynamic assessment, and pain management consultation recommended.');
+    if (impingementRisk > 30 && avgElbowDiff > 12)
+      recLines.push('🦴 ORTHOPAEDIC / PHYSIOTHERAPIST: Shoulder elevation asymmetry. Rotator cuff ultrasound or MRI. Subacromial injection and targeted rehabilitation if indicated.');
+    if (pelvicRisk > 20)
+      recLines.push('🦴 PHYSIOTHERAPIST / PODIATRIST: Pelvic imbalance. Leg length discrepancy assessment, hip flexibility evaluation, and custom orthotics recommended.');
+    if (recLines.length === 1 && abnormalFindings.length > 0)
+      recLines.push('👨‍⚕️ PHYSIOTHERAPIST: Postural deviations detected. Targeted stretching, core strengthening, and ergonomic workspace adjustment recommended.');
+
     const recommendation = abnormalFindings.length === 0
-      ? 'Continue your current posture habits. Regular stretching and core strengthening exercises are recommended. No immediate clinical consultation required based on this screening.'
-      : `⚠️ This is an AI estimate only — not a medical diagnosis. ${highRiskConditions.length > 0
-        ? `High-risk indicators suggest possible: ${highRiskConditions.map(c => c.name).join(', ')}. Please consult an orthopaedic specialist or neurologist immediately.`
-        : conditions.length > 0
-          ? `Possible conditions detected: ${topConditions}. Consider scheduling a physiotherapy or clinical assessment.`
-          : 'Postural deviations detected. Targeted stretching and posture correction exercises are recommended.'
-      }`;
+      ? '✅ No significant postural abnormalities detected. Continue regular stretching and core strengthening. No immediate clinical consultation required.'
+      : recLines.join('\n\n');
 
     return { score, grade, status, findings, conditions, measurements, summary, recommendation };
 

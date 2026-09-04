@@ -69,15 +69,20 @@ export function useAssessmentData(
     }
   };
 
+  const [diagnosisReport, setDiagnosisReport] = useState<any | null>(null);
+
   const clearData = () => {
     setDbHistory([]);
     setAnalysisResult(null);
+    setDiagnosisReport(null);
   };
 
   return {
     backendConnected,
     analysisResult,
     setAnalysisResult,
+    diagnosisReport,
+    setDiagnosisReport,
     dbHistory,
     uploading,
     fetchHistory,
