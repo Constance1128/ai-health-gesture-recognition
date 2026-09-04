@@ -42,6 +42,11 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
   const screenStateRef = useRef<ScreenState>(screenState);
   const [humanLoading, setHumanLoading] = useState(true);
 
+  const onSnapshotsCollectedRef = useRef(onSnapshotsCollected);
+  useEffect(() => {
+    onSnapshotsCollectedRef.current = onSnapshotsCollected;
+  }, [onSnapshotsCollected]);
+
   useEffect(() => {
     screenStateRef.current = screenState;
     // When SCREENING begins, reset snapshot accumulator
@@ -50,7 +55,7 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
       hasSavedRef.current = 0;
     }
     // When FINISHED, pass collected snapshots up
-    if (screenState === 'FINISHED' && onSnapshotsCollected && angleSnapshotsRef.current.length > 0) {
+    if (screenState === 'FINISHED' && onSnapshotsCollectedRef.current && angleSnapshotsRef.current.length > 0) {
       const snapsToSend = angleSnapshotsRef.current;
       // DEBUG: log wrist data to diagnose tremor detection
       const sample = snapsToSend[0];
@@ -58,10 +63,10 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
         '| lWrist[0]:', sample?.leftWrist?.x?.toFixed(4), sample?.leftWrist?.y?.toFixed(4),
         '| rWrist[0]:', sample?.rightWrist?.x?.toFixed(4), sample?.rightWrist?.y?.toFixed(4),
         '| analysisResult mode:', analysisResultRef.current?.mode);
-      onSnapshotsCollected(snapsToSend);
+      onSnapshotsCollectedRef.current(snapsToSend);
       angleSnapshotsRef.current = [];
     }
-  }, [screenState, onSnapshotsCollected]);
+  }, [screenState]);
 
   useEffect(() => {
     analysisResultRef.current = analysisResult;

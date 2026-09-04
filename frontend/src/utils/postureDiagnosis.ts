@@ -446,7 +446,11 @@ export function generateDiagnosis(snapshots: PostureSnapshot[], analysisResult: 
         if (arr.length < 2) return 0;
         const diffs = [];
         for (let i = 1; i < arr.length; i++) {
-          diffs.push(arr[i] - arr[i - 1]);
+          const diff = arr[i] - arr[i - 1];
+          // GLITCH FILTER: Ignore massive jumps (MediaPipe tracking errors)
+          if (Math.abs(diff) < 0.15) {
+            diffs.push(diff);
+          }
         }
         return calcVar(diffs);
       };
@@ -464,9 +468,9 @@ export function generateDiagnosis(snapshots: PostureSnapshot[], analysisResult: 
         '| sessionMaxTremorProb:', (analysisResult?.metrics?.session_max_tremor_prob || 0).toFixed(3));
 
       // A normal resting tremor is around 4-6 Hz. Waving your hand is < 1 Hz.
-      // 0.0150 filters out macro-movements like waving or adjusting the camera.
-      if (maxAcc >= 0.0150) {
-        tremorProb = Math.min(0.92, Math.max(0.68, 0.68 + ((maxAcc - 0.0150) / 0.02) * 0.24));
+      // 0.0005 filters out macro-movements AND normal webcam noise/jitter.
+      if (maxAcc >= 0.0005) {
+        tremorProb = Math.min(0.92, Math.max(0.68, 0.68 + ((maxAcc - 0.0005) / 0.0020) * 0.24));
       }
 
       // Secondary signal: if backend detected high tremor during this session
@@ -588,7 +592,7 @@ export function generateDiagnosis(snapshots: PostureSnapshot[], analysisResult: 
     const illnessFindings: PostureFinding[] = [];
 
     // Parkinson's / Tremor — only show when conditions section is also triggered (> 0.35)
-    if (tremorProb > 0.35 || statusText.includes('parkinson')) {
+    if (tremorProb > 0.35 || statusText.includes('parkinson') || statusText.includes('tremor')) {
       const tremorFreq = analysisResult?.metrics?.tremor_freq || analysisResult?.metrics?.frequency_hz || 5.0;
       const isParkinsons = statusText.includes('parkinson') || (tremorFreq >= 3.0 && tremorFreq <= 6.5);
 
