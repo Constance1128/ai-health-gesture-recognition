@@ -90,8 +90,8 @@ class SwinTransformerClassifier:
         r_vel = np.diff(r_coords, axis=0) if len(r_coords) > 5 else np.array([[0,0]])
         
         # GLITCH FILTER: Ignore massive jumps (MediaPipe tracking errors)
-        l_vel = l_vel[np.all(np.abs(l_vel) < 0.15, axis=1)] if len(l_vel) > 0 else np.array([[0,0]])
-        r_vel = r_vel[np.all(np.abs(r_vel) < 0.15, axis=1)] if len(r_vel) > 0 else np.array([[0,0]])
+        l_vel = l_vel[np.all(np.abs(l_vel) < 0.50, axis=1)] if len(l_vel) > 0 else np.array([[0,0]])
+        r_vel = r_vel[np.all(np.abs(r_vel) < 0.50, axis=1)] if len(r_vel) > 0 else np.array([[0,0]])
         
         # Variance of velocity (acceleration/jitter)
         l_acc = np.mean(np.var(l_vel, axis=0)) if len(l_vel) > 0 else 0
@@ -100,13 +100,13 @@ class SwinTransformerClassifier:
         
         # MOTION GATE: If velocity variance is low, it's either perfectly still OR a smooth macro movement (e.g. raising arm).
         # Tremors have high velocity variance (rapid direction changes).
-        # Set to 0.0005 to safely ignore macro-movements like waving or pointing.
+        # Set to 0.0005 to safely ignore completely smooth movements.
         if true_tremor < 0.0005:
             return 0.0
             
         # Bypass the synthetic Neural Network and use accurate mathematical probability
-        prob = 0.68 + ((true_tremor - 0.0005) / 0.0020) * 0.24
-        return float(min(0.92, max(0.68, prob)))
+        prob = (true_tremor - 0.0005) * 260.0 + 0.10
+        return float(min(0.95, prob))
 
 # =====================================================================
 # 2. BiLSTM Network for Gait & Movement Symmetry Analysis

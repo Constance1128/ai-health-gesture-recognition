@@ -128,8 +128,8 @@ async def upload_video(
     if fps <= 0:
         fps = 30.0
 
-    # Sample a frame every 300ms to match real-time stream frequency
-    sample_rate_frames = int(fps * 0.3)
+    # Sample a frame every 50ms (20 FPS) to match real-time stream frequency and detect tremors
+    sample_rate_frames = int(fps * 0.05)
     if sample_rate_frames <= 0:
         sample_rate_frames = 1
 

@@ -418,20 +418,13 @@ export function generateDiagnosis(snapshots: PostureSnapshot[], analysisResult: 
         return arr.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / arr.length;
       };
 
-      // Filter out frames where wrist isn't visible (coordinate = 0 means MediaPipe missed it)
-      const lxRaw = snapshots.map(s => s.leftWrist?.x ?? 0);
-      const lyRaw = snapshots.map(s => s.leftWrist?.y ?? 0);
-      const rxRaw = snapshots.map(s => s.rightWrist?.x ?? 0);
-      const ryRaw = snapshots.map(s => s.rightWrist?.y ?? 0);
-
-      const lValid = lxRaw.filter(v => v > 0.01).length;
-      const rValid = rxRaw.filter(v => v > 0.01).length;
-
-      // Use the wrist that has more valid readings
-      const lx = lxRaw.filter(v => v > 0.01);
-      const ly = lyRaw.filter(v => v > 0.01);
-      const rx = rxRaw.filter(v => v > 0.01);
-      const ry = ryRaw.filter(v => v > 0.01);
+      // Extract raw coordinates. We don't filter by visibility here because fast shakes cause motion blur
+      // which artificially drops MediaPipe's visibility score. Instead, we just filter out EXACT 0,0
+      // which indicates the joint is completely missing from the frame (or fell back to our ?? 0).
+      const lx = snapshots.map(s => s.leftWrist?.x ?? 0).filter(v => v !== 0);
+      const ly = snapshots.map(s => s.leftWrist?.y ?? 0).filter(v => v !== 0);
+      const rx = snapshots.map(s => s.rightWrist?.x ?? 0).filter(v => v !== 0);
+      const ry = snapshots.map(s => s.rightWrist?.y ?? 0).filter(v => v !== 0);
 
       const lVarX = calcVar(lx), lVarY = calcVar(ly);
       const rVarX = calcVar(rx), rVarY = calcVar(ry);
@@ -448,7 +441,7 @@ export function generateDiagnosis(snapshots: PostureSnapshot[], analysisResult: 
         for (let i = 1; i < arr.length; i++) {
           const diff = arr[i] - arr[i - 1];
           // GLITCH FILTER: Ignore massive jumps (MediaPipe tracking errors)
-          if (Math.abs(diff) < 0.15) {
+          if (Math.abs(diff) < 0.50) {
             diffs.push(diff);
           }
         }
@@ -467,20 +460,15 @@ export function generateDiagnosis(snapshots: PostureSnapshot[], analysisResult: 
         '| maxAcc (velocity var):', maxAcc.toFixed(6),
         '| sessionMaxTremorProb:', (analysisResult?.metrics?.session_max_tremor_prob || 0).toFixed(3));
 
-      // A normal resting tremor is around 4-6 Hz. Waving your hand is < 1 Hz.
-      // 0.0005 filters out macro-movements AND normal webcam noise/jitter.
-      if (maxAcc >= 0.0005) {
-        tremorProb = Math.min(0.92, Math.max(0.68, 0.68 + ((maxAcc - 0.0005) / 0.0020) * 0.24));
+      // 0.00002 safely filters out standard 1080p webcam static noise.
+      if (maxAcc >= 0.00002) {
+        // Smooth scale: 0.00002 -> 0.10 (Normal), 0.00008 -> 0.40 (Mild), 0.00015+ -> 0.75+ (Parkinson's)
+        tremorProb = Math.min(0.95, (maxAcc - 0.00002) * 5000.0 + 0.10);
       }
 
-      // Secondary signal: if backend detected high tremor during this session
-      // (stored as session_max_tremor_prob injected by LiveDetectionPanel),
-      // use it as a floor to ensure shaking is never missed
-      const sessionMaxBackend = analysisResult?.metrics?.session_max_tremor_prob || 0;
-      if (sessionMaxBackend >= 0.55 && tremorProb < 0.68) {
-        // Backend confidence, downweighted to avoid false positives
-        tremorProb = Math.max(tremorProb, sessionMaxBackend * 0.75);
-      }
+      // Frontend calculates the tremor directly from 50ms snapshots.
+      // We no longer inherit the backend's max probability because the backend runs at 5 FPS,
+      // which causes normal macro-movements to alias as tremors and trigger false positives.
     } else if (analysisResult?.mode === 'tremor') {
       // Fallback for tremor-mode only: use backend value directly
       tremorProb = backendTremorProb;
@@ -498,8 +486,10 @@ export function generateDiagnosis(snapshots: PostureSnapshot[], analysisResult: 
     }
 
     // ── Cerebral Palsy Indicators ────────────────────────────
+    // We strictly use Knee and Shoulder asymmetry. 
+    // We DO NOT use Elbow asymmetry because users standing casually with one hand on their hip will trigger CP!
     const cpRisk = clamp(
-      Math.round((avgElbowDiff * 2) + (avgKneeDiff * 1.5) + (avgShoulderAsymmetry * 3)),
+      Math.round((avgKneeDiff * 2.5) + (avgShoulderAsymmetry * 4.0)),
       0, 100
     );
     if (cpRisk > 40) {

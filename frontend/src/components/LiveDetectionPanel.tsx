@@ -88,11 +88,9 @@ export const LiveDetectionPanel: React.FC<LiveDetectionPanelProps> = ({
   // (the final analysisResult may not be the frame with highest tremor)
   const maxSessionTremorProbRef = React.useRef<number>(0);
 
-  // Reset session when SCREENING starts — gives backend a fresh session_id
-  // so old tremor frames from previous sessions don't contaminate the result
+  // Reset tremor tracker when SCREENING starts
   React.useEffect(() => {
     if (screenState === 'SCREENING') {
-      setSessionId(`capture_${Date.now()}`);
       maxSessionTremorProbRef.current = 0; // reset per-session tremor tracker
     }
   }, [screenState]);
@@ -114,8 +112,8 @@ export const LiveDetectionPanel: React.FC<LiveDetectionPanelProps> = ({
         (analysisResult.status && analysisResult.status.toLowerCase().includes('abnormal'));
 
       if (isAbnormal && addNotification) {
-        // Prevent duplicate alerts for the same timestamp
-        const alertId = `alert_${analysisResult.timestamp || Date.now()}`;
+        // Prevent duplicate alerts for the same session
+        const alertId = `alert_${sessionId || 'fallback'}`;
         if (!localStorage.getItem(alertId)) {
           localStorage.setItem(alertId, 'true');
 
@@ -241,6 +239,7 @@ export const LiveDetectionPanel: React.FC<LiveDetectionPanelProps> = ({
                 {calibrationDetail === 'too_far' && "Please walk closer to the camera."}
                 {calibrationDetail === 'too_close' && "Step back so your full body is visible."}
                 {calibrationDetail === 'outside' && "Align your body centrally within the frame."}
+                {calibrationDetail === 'side_profile' && "Please face the camera directly. Do not stand sideways."}
                 {calibrationDetail === 'moving' && "Hold perfectly still to complete calibration."}
               </span>
             </div>

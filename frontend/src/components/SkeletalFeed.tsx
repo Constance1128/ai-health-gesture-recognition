@@ -6,6 +6,29 @@ import { drawSkeleton, getJointsVariance, getFilteredConnections, drawPoseAngles
 import { PostureSnapshot, buildSnapshot } from '../utils/postureDiagnosis';
 import * as analysisApi from '../api/analysis.api';
 
+const checkCalibration = (landmarks: JointPoint[]): string => {
+  const leftShoulder = landmarks.find(l => l.name === 'left_shoulder');
+  const rightShoulder = landmarks.find(l => l.name === 'right_shoulder');
+  const leftHip = landmarks.find(l => l.name === 'left_hip');
+  const rightHip = landmarks.find(l => l.name === 'right_hip');
+  
+  if (!leftShoulder || !rightShoulder || !leftHip || !rightHip) return 'not_detected';
+  if ((leftShoulder.visibility ?? 1) < 0.6 || (rightShoulder.visibility ?? 1) < 0.6) return 'not_detected';
+  if ((leftHip.visibility ?? 1) < 0.6 || (rightHip.visibility ?? 1) < 0.6) return 'not_detected';
+
+  const shoulderDist = Math.abs(leftShoulder.x - rightShoulder.x);
+  const hipDist = Math.abs(leftHip.x - rightHip.x);
+  
+  // Side profile check (if shoulders/hips overlap horizontally)
+  if (shoulderDist < 0.08 || hipDist < 0.05) return 'side_profile';
+  
+  // Distance checks
+  if (shoulderDist > 0.6) return 'too_close';
+  if (shoulderDist < 0.12) return 'too_far';
+  
+  return 'ok';
+};
+
 export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?: (snapshots: PostureSnapshot[]) => void }> = ({
   cameraActive,
   setCameraActive,
@@ -228,7 +251,7 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
               x: kp.x,
               y: kp.y,
               z: kp.z || 0,
-              visibility: kp.visibility || 0.9
+              visibility: kp.visibility ?? 0.0
             }));
 
             localLandmarksRef.current = mapped;
@@ -241,15 +264,19 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
               // Accumulate posture snapshots during SCREENING (one every ~10 frames)
               if (screenStateRef.current === 'SCREENING') {
                 if (angleSnapshotsRef.current.length === 0 ||
-                  Date.now() - angleSnapshotsRef.current[angleSnapshotsRef.current.length - 1].timestamp > 300) {
+                  Date.now() - angleSnapshotsRef.current[angleSnapshotsRef.current.length - 1].timestamp > 50) {
                   angleSnapshotsRef.current.push(buildSnapshot(mapped));
                 }
               }
 
               if (screenState === 'PREPARATION' && onCalibrationStatusChange && landmarkHistoryRef.current.length >= 3) {
-                // Force instant calibration success
-                if (onCalibrationStatusChange) {
-                  onCalibrationStatusChange(true, 'ok');
+                const status = checkCalibration(mapped);
+                if (status === 'ok') {
+                   isStaticRef.current = true;
+                   onCalibrationStatusChange(true, 'ok');
+                } else {
+                   isStaticRef.current = false;
+                   onCalibrationStatusChange(false, status);
                 }
               }
             }
@@ -342,10 +369,6 @@ export const SkeletalFeed: React.FC<SkeletalFeedProps & { onSnapshotsCollected?:
               fetchHistory(currentUser?.email);
             }
 
-            // Force instant calibration success to bypass any backend/local connection bugs
-            if (screenState === 'PREPARATION' && onCalibrationStatusChange) {
-              onCalibrationStatusChange(true, 'ok');
-            }
           }).catch(err => {
             console.error("Backend frame processing error:", err);
           }).finally(() => {
