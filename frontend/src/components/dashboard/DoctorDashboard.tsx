@@ -13,7 +13,11 @@ import { downloadPDFReport } from '../../utils/pdfGenerator';
 import { DoctorPatientChat } from './DoctorPatientChat';
 import dayjs from 'dayjs';
 import isBetween from 'dayjs/plugin/isBetween';
+import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
+import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 dayjs.extend(isBetween);
+dayjs.extend(isSameOrAfter);
+dayjs.extend(isSameOrBefore);
 import { DailyTimeline } from './DailyTimeline';
 import * as doctorApi from '../../api/doctor.api';
 
@@ -763,7 +767,12 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
                           const dow = calSelectedDate.day();
                           const dayAppts = agendaAppointments.filter(a => a.appointment_date === todayStr && a.status !== 'CANCELLED');
                           const dayBlocks = agendaOverrides.filter(o => o.date === todayStr);
-                          const workSched = agendaSchedule.find((s: any) => s.day_of_week === dow);
+                          const workSched = agendaSchedule.find((s: any) => {
+                            if (s.day_of_week !== dow) return false;
+                            if (s.effective_start_date && calSelectedDate.isBefore(dayjs(s.effective_start_date), 'day')) return false;
+                            if (s.effective_end_date && calSelectedDate.isSameOrAfter(dayjs(s.effective_end_date), 'day')) return false;
+                            return true;
+                          });
 
                           if (dayAppts.length === 0 && dayBlocks.length === 0 && !workSched) {
                             return <Empty description="No events on this day" />;

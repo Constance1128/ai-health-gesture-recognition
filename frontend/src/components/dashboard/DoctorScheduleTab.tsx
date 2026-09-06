@@ -57,9 +57,11 @@ export const DoctorScheduleTab: React.FC<DoctorScheduleTabProps> = ({ currentUse
 
   const handleSaveWeeklySchedule = async () => {
     try {
-      await doctorApi.updateDoctorSchedule({ email: currentUser.email, schedules: weeklySchedule });
+      const activeSchedules = weeklySchedule.filter(s => !s.effective_end_date);
+      await doctorApi.updateDoctorSchedule({ email: currentUser.email, schedules: activeSchedules });
       message.success('Weekly schedule updated!');
       fetchData();
+      if (refreshDashboard) refreshDashboard();
     } catch (e) {
       message.error('Failed to update schedule');
     }
@@ -214,7 +216,8 @@ export const DoctorScheduleTab: React.FC<DoctorScheduleTabProps> = ({ currentUse
               bodyStyle={{ padding: '24px' }}
             >
               {DAYS_OF_WEEK.map(day => {
-                const dayData = weeklySchedule.find(s => s.day_of_week === day.value);
+                const activeSchedules = weeklySchedule.filter(s => !s.effective_end_date);
+                const dayData = activeSchedules.find(s => s.day_of_week === day.value);
                 const isActive = !!dayData;
                 return (
                   <div key={day.value} className={`flex flex-col sm:flex-row items-start sm:items-center justify-between py-3 border-b last:border-0 ${isDarkMode ? 'border-slate-800' : 'border-slate-100'}`}>

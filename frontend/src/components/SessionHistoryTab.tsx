@@ -191,10 +191,14 @@ const ScoreGauge: React.FC<{ score: number; grade: string; status: string }> = (
   );
 };
 
-const FindingCard: React.FC<{ label: string; severity: string; category: string; description: string }> = ({ label, severity, category, description }) => {
+const FindingCard: React.FC<{ label: string; severity: string; category: string; description: string; isDarkMode?: boolean }> = ({ label, severity, category, description, isDarkMode = true }) => {
   const color = SEVERITY_COLOR[severity] || SEVERITY_COLOR['mild'];
   const bg = SEVERITY_BG[severity] || SEVERITY_BG['mild'];
   const Icon = severity === 'normal' ? CheckCircleOutlined : severity === 'severe' ? AlertOutlined : WarningOutlined;
+
+  const titleColor = isDarkMode ? '#f1f5f9' : '#000000';
+  const categoryColor = isDarkMode ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.5)';
+  const descColor = isDarkMode ? 'rgba(255,255,255,0.6)' : '#000000';
 
   return (
     <div style={{
@@ -209,16 +213,16 @@ const FindingCard: React.FC<{ label: string; severity: string; category: string;
       <Icon style={{ color, fontSize: 16, marginTop: 2, flexShrink: 0 }} />
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-          <span style={{ color: '#f1f5f9', fontWeight: 700, fontSize: 13 }}>{label}</span>
+          <span style={{ color: titleColor, fontWeight: 700, fontSize: 13 }}>{label}</span>
           <span style={{
             background: `${color}22`, color, borderRadius: 4, padding: '1px 7px',
             fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
           }}>
             {severity}
           </span>
-          <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11 }}>{category}</span>
+          <span style={{ color: categoryColor, fontSize: 11 }}>{category}</span>
         </div>
-        <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, margin: 0, lineHeight: 1.5 }}>
+        <p style={{ color: descColor, fontSize: 12, margin: 0, lineHeight: 1.5 }}>
           {description}
         </p>
       </div>
@@ -672,8 +676,9 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[], isDarkMode:
         onCancel={() => setSelectedSessionId(null)}
         footer={null}
         width={600}
+        centered
         styles={{
-          body: { paddingTop: 16 }
+          body: { paddingTop: 16, maxHeight: '70vh', overflowY: 'auto' }
         }}
       >
         {activeSession && (
@@ -801,6 +806,7 @@ const SingleCaptureDashboard: React.FC<{ dbHistory: HistoryRecord[], isDarkMode:
                         severity={f.severity}
                         category={f.affectedArea || 'General'}
                         description={f.description}
+                        isDarkMode={false}
                       />
                     ))}
                   </div>

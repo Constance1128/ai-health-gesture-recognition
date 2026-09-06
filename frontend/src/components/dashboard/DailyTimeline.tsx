@@ -51,7 +51,12 @@ export const DailyTimeline: React.FC<DailyTimelineProps> = ({ date, appointments
   const hours = Array.from({ length: 24 }, (_, i) => i); // 00:00 to 23:00
 
   const dayOfWeek = date.day(); // 0 = Sunday, 1 = Monday
-  const daySchedule = weeklySchedule.find(s => s.day_of_week === dayOfWeek);
+  const daySchedule = weeklySchedule.find(s => {
+    if (s.day_of_week !== dayOfWeek) return false;
+    if (s.effective_start_date && date.isBefore(dayjs(s.effective_start_date), 'day')) return false;
+    if (s.effective_end_date && date.isSameOrAfter(dayjs(s.effective_end_date), 'day')) return false;
+    return true;
+  });
 
   // Compute Now and Next
   const now = dayjs();

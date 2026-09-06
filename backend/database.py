@@ -277,6 +277,14 @@ def init_db():
         except sqlite3.OperationalError:
             pass
 
+        # Database Migration: Add effective dates to doctor_schedule if they don't exist
+        try:
+            cursor.execute("ALTER TABLE doctor_schedule ADD COLUMN effective_start_date TEXT")
+            cursor.execute("ALTER TABLE doctor_schedule ADD COLUMN effective_end_date TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
         # Database Migration: Add is_read column to messages if it doesn't exist
         try:
             cursor.execute("ALTER TABLE messages ADD COLUMN is_read INTEGER DEFAULT 0")
@@ -1089,15 +1097,26 @@ def get_doctor_schedule(doctor_id: int) -> List[Dict[str, Any]]:
             conn.close()
 
 def update_doctor_schedule(doctor_id: int, schedules: List[Dict[str, Any]]) -> bool:
+    import datetime
     conn = None
     try:
         conn = sqlite3.connect(DB_FILE, timeout=30.0)
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM doctor_schedule WHERE doctor_id = ?", (doctor_id,))
+        
+        today_str = datetime.date.today().isoformat()
+        
+        # End current active schedules
+        cursor.execute("""
+            UPDATE doctor_schedule 
+            SET effective_end_date = ? 
+            WHERE doctor_id = ? AND effective_end_date IS NULL
+        """, (today_str, doctor_id))
+        
+        # Insert new schedules
         for sched in schedules:
             cursor.execute(
-                "INSERT INTO doctor_schedule (doctor_id, day_of_week, start_time, end_time) VALUES (?, ?, ?, ?)",
-                (doctor_id, sched['day_of_week'], sched['start_time'], sched['end_time'])
+                "INSERT INTO doctor_schedule (doctor_id, day_of_week, start_time, end_time, effective_start_date) VALUES (?, ?, ?, ?, ?)",
+                (doctor_id, sched['day_of_week'], sched['start_time'], sched['end_time'], today_str)
             )
         conn.commit()
         return True

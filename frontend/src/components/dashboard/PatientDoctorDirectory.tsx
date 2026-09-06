@@ -3,6 +3,10 @@ import { Card, Row, Col, List, Avatar, Typography, Input, Button, Switch, messag
 import { SendOutlined, PaperClipOutlined, DeleteOutlined, UserOutlined, SearchOutlined, CalendarOutlined, ClockCircleOutlined, EnvironmentOutlined, SmileOutlined, CheckOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { Doctor, Message, User, Appointment } from '../../types';
 import dayjs from 'dayjs';
+import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
+import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
+dayjs.extend(isSameOrAfter);
+dayjs.extend(isSameOrBefore);
 import * as patientApi from '../../api/patient.api';
 import * as chatApi from '../../api/chat.api';
 import * as doctorApi from '../../api/doctor.api';
@@ -189,7 +193,12 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
 
     // 2. Add Standard Slots based on Weekly Schedule
     const dayOfWeek = selectedDate.day();
-    const scheduleForDay = doctorSchedule.find(s => s.day_of_week === dayOfWeek);
+    const scheduleForDay = doctorSchedule.find(s => {
+      if (s.day_of_week !== dayOfWeek) return false;
+      if (s.effective_start_date && selectedDate.isBefore(dayjs(s.effective_start_date), 'day')) return false;
+      if (s.effective_end_date && selectedDate.isSameOrAfter(dayjs(s.effective_end_date), 'day')) return false;
+      return true;
+    });
     
     let standardSlots: string[] = [];
     if (doctorSchedule.length === 0) {
@@ -423,6 +432,7 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                           ) : (
                             <div className="space-y-1">
                               {[...doctorSchedule]
+                                .filter(s => !s.effective_end_date)
                                 .sort((a, b) => a.day_of_week - b.day_of_week)
                                 .map(s => (
                                 <div key={s.day_of_week} className="flex justify-between text-sm border-b border-slate-50 dark:border-slate-800 pb-1">
