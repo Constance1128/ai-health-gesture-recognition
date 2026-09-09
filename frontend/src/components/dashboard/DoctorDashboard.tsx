@@ -31,6 +31,8 @@ import { LiveDetectionPanel } from '../LiveDetectionPanel';
 import { ScreenState } from '../../types';
 
 import { DoctorScheduleTab } from './DoctorScheduleTab';
+import { ConsultationNotesPanel } from './ConsultationNotesPanel';
+import { DoctorConsultationNotesTab } from './DoctorConsultationNotesTab';
 
 const DAYS_OF_WEEK = [
   { label: 'Sunday', value: 0 },
@@ -239,6 +241,14 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
       setLoading(true);
       const data = await doctorApi.getDoctorPatients(currentUser.email);
       setPatients(data);
+      const savedPatientId = sessionStorage.getItem('doctor_selected_patient_id');
+      if (savedPatientId) {
+        const match = data.find((p: any) => p.id === Number(savedPatientId));
+        if (match) {
+          setSelectedPatient(match);
+          fetchPatientHistory(match.email);
+        }
+      }
     } catch (e) {
       console.error(e);
       message.error("Failed to load patients");
@@ -268,7 +278,6 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
       setPatientHistory(data);
     } catch (e: any) {
       console.error(e);
-      message.error(e.message || "No permission to view this patient's records");
       setPatientHistory([]);
     } finally {
       setHistoryLoading(false);
@@ -280,6 +289,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
     fetchPatients();
     fetchUnreadCounts();
     const interval = setInterval(() => {
+      fetchDashboardData();
       fetchPatients();
       fetchUnreadCounts();
     }, 5000); // Poll every 5s
@@ -336,13 +346,20 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
   // handleChatOpen removed
 
   const handleSelectPatient = async (patient: any) => {
+    if (patient) {
+      sessionStorage.setItem('doctor_selected_patient_id', String(patient.id));
+    } else {
+      sessionStorage.removeItem('doctor_selected_patient_id');
+    }
     setSelectedPatient(patient);
-    fetchPatientHistory(patient.email);
-    try {
-      await chatApi.markMessagesRead({ email: currentUser.email, other_user_id: patient.id });
-      setUnreadCounts(prev => ({ ...prev, [patient.id]: 0 }));
-    } catch (e) {
-      console.error(e);
+    if (patient) {
+      fetchPatientHistory(patient.email);
+      try {
+        await chatApi.markMessagesRead({ email: currentUser.email, other_user_id: patient.id });
+        setUnreadCounts(prev => ({ ...prev, [patient.id]: 0 }));
+      } catch (e) {
+        console.error(e);
+      }
     }
   };
 
@@ -385,6 +402,8 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
   const getInitials = (name: string) => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   };
+
+  const pendingBookingsCount = agendaAppointments.filter(a => a.status === 'pending').length;
 
   return (
     <Layout className={`min-h-screen ${isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-800'}`}>
@@ -487,7 +506,8 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
                   { key: 'history', icon: <HistoryOutlined />, label: 'History' },
                   { key: 'calendar', icon: <AppstoreOutlined />, label: 'Calendar' },
                   { key: 'patients', icon: <UserOutlined />, label: 'Patients', badge: Object.values(unreadCounts).reduce((a, b) => a + b, 0) },
-                  { key: 'learn', icon: <FileTextOutlined />, label: 'Learn & FAQs' },
+                  { key: 'consultation_notes', icon: <FileTextOutlined />, label: 'Consultation Notes' },
+                  { key: 'learn', icon: <InfoCircleOutlined />, label: 'Learn & FAQs' },
                 ].map(item => (
                   <Button
                     key={item.key}
@@ -524,7 +544,9 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
                   }`}
                 >
                   <span className="flex items-center justify-center gap-2">
-                    <CalendarOutlined /> <span className="font-semibold text-sm">Schedule & Bookings</span>
+                    <CalendarOutlined /> 
+                    <span className="font-semibold text-sm">Schedule & Bookings</span>
+                    {pendingBookingsCount > 0 && <Badge count={pendingBookingsCount} />}
                   </span>
                 </Button>
               </div>
@@ -821,6 +843,22 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
 
 
 
+              {activeNav === 'consultation_notes' && (
+                <div className="flex-1 min-h-0 flex flex-col w-full overflow-hidden">
+                  <DoctorConsultationNotesTab 
+                    currentUser={currentUser} 
+                    isDarkMode={isDarkMode} 
+                    onSelectPatientForChat={(patientId) => {
+                      const patient = patients.find(p => p.id === patientId);
+                      if (patient) {
+                        handleSelectPatient(patient);
+                        setActiveNav('patients');
+                      }
+                    }}
+                  />
+                </div>
+              )}
+
               {activeNav === 'learn' && (
                 <div className="flex-1 min-h-0 overflow-y-auto max-w-7xl mx-auto w-full">
                   <LearnAndFaqTab isDarkMode={isDarkMode} />
@@ -839,47 +877,20 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
                           currentUser={currentUser} 
                           selectedPatient={selectedPatient} 
                           isDarkMode={isDarkMode} 
-                          onBack={() => setSelectedPatient(null)}
+                          onBack={() => {
+                            sessionStorage.removeItem('doctor_selected_patient_id');
+                            setSelectedPatient(null);
+                          }}
                         />
                       </Col>
 
-                      {/* Right Column - Appointment Records & Suggestions */}
+                      {/* Right Column - Consultation Notes & History */}
                       <Col xs={24} lg={8} className="h-full">
-                        <Card 
-                          title={
-                            <Space>
-                              <FileTextOutlined className="text-blue-600" />
-                              <span className={`font-bold ${isDarkMode ? 'text-white' : ''}`}>Consultation Notes</span>
-                            </Space>
-                          }
-                          className={`h-full flex flex-col border shadow-sm rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}
-                          bodyStyle={{ display: 'flex', flexDirection: 'column', flex: 1, padding: '20px' }}
-                        >
-                          <div className="flex-1 flex flex-col space-y-4">
-                            <div>
-                              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Diagnosis / Findings</div>
-                              <Input.TextArea
-                                rows={4}
-                                placeholder="Enter clinical observations here..."
-                                className={`rounded-xl border ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white placeholder:text-slate-500' : 'bg-slate-50 border-slate-200'}`}
-                              />
-                            </div>
-                            <div className="flex-1 flex flex-col">
-                              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Treatment Suggestions</div>
-                              <Input.TextArea
-                                className={`flex-1 rounded-xl border resize-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white placeholder:text-slate-500' : 'bg-slate-50 border-slate-200'}`}
-                                placeholder="Enter recommendations, exercises, or follow-up instructions..."
-                              />
-                            </div>
-                            <Button 
-                              type="primary" 
-                              className="bg-blue-600 hover:bg-blue-500 border-0 rounded-xl font-bold h-10 mt-2"
-                              onClick={() => message.success('Consultation record saved successfully!')}
-                            >
-                              Save Appointment Record
-                            </Button>
-                          </div>
-                        </Card>
+                        <ConsultationNotesPanel
+                          currentUser={currentUser}
+                          selectedPatient={selectedPatient}
+                          isDarkMode={isDarkMode}
+                        />
                       </Col>
                     </Row>
                   </>

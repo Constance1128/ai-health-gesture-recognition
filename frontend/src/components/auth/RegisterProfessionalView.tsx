@@ -68,7 +68,7 @@ export const RegisterProfessionalView: React.FC<RegisterProfessionalViewProps> =
         label={<span className="text-xs font-semibold">Full Name</span>}
         rules={[{ required: true, message: 'Please enter your name' }]}
       >
-        <Input prefix={<UserOutlined className="text-slate-400" />} placeholder="Dr. John Doe" />
+        <Input prefix={<UserOutlined className="text-slate-400" />} placeholder="Dr. John Doe" allowClear />
       </Form.Item>
 
       <Row gutter={16}>
@@ -112,7 +112,7 @@ export const RegisterProfessionalView: React.FC<RegisterProfessionalViewProps> =
           { type: 'email', message: 'Please enter a valid email' }
         ]}
       >
-        <Input prefix={<MailOutlined className="text-slate-400" />} placeholder="john@hospital.com" />
+        <Input prefix={<MailOutlined className="text-slate-400" />} placeholder="john@hospital.com" allowClear />
       </Form.Item>
 
       <Row gutter={16}>
@@ -125,7 +125,7 @@ export const RegisterProfessionalView: React.FC<RegisterProfessionalViewProps> =
               { min: 6, message: 'Password must be at least 6 characters' }
             ]}
           >
-            <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" />
+            <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" allowClear />
           </Form.Item>
         </Col>
         <Col span={12}>
@@ -145,7 +145,7 @@ export const RegisterProfessionalView: React.FC<RegisterProfessionalViewProps> =
               }),
             ]}
           >
-            <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" />
+            <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" allowClear />
           </Form.Item>
         </Col>
       </Row>
@@ -173,7 +173,7 @@ export const RegisterProfessionalView: React.FC<RegisterProfessionalViewProps> =
             label={<span className="text-xs font-semibold">Medical License</span>}
             rules={[{ required: true, message: 'Enter license number' }]}
           >
-            <Input placeholder="LIC-12345" />
+            <Input placeholder="LIC-12345" allowClear />
           </Form.Item>
         </Col>
       </Row>

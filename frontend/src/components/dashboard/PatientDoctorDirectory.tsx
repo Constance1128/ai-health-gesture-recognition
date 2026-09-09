@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, Row, Col, List, Avatar, Typography, Input, Button, Switch, message, Upload, Spin, Tag, Badge, Divider, Tabs, Form, DatePicker, TimePicker, Modal, Space, Empty, Popover, Image, Timeline } from 'antd';
-import { SendOutlined, PaperClipOutlined, DeleteOutlined, UserOutlined, SearchOutlined, CalendarOutlined, ClockCircleOutlined, EnvironmentOutlined, SmileOutlined, CheckOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { Card, Row, Col, List, Avatar, Typography, Input, Button, Switch, message, Upload, Spin, Tag, Badge, Divider, Tabs, Form, DatePicker, TimePicker, Modal, Space, Empty, Popover, Image, Timeline, Radio, Alert, Segmented, Popconfirm } from 'antd';
+import { SendOutlined, PaperClipOutlined, DeleteOutlined, UserOutlined, SearchOutlined, CalendarOutlined, ClockCircleOutlined, EnvironmentOutlined, SmileOutlined, CheckOutlined, InfoCircleOutlined, ExclamationCircleOutlined, HistoryOutlined, StopOutlined, FilterOutlined, CheckCircleOutlined, VideoCameraOutlined, EyeOutlined, FileTextOutlined } from '@ant-design/icons';
+
+
 import { Doctor, Message, User, Appointment } from '../../types';
 import dayjs from 'dayjs';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
@@ -11,6 +13,7 @@ import * as patientApi from '../../api/patient.api';
 import * as chatApi from '../../api/chat.api';
 import * as doctorApi from '../../api/doctor.api';
 import * as sharedApi from '../../api/shared.api';
+import { AppointmentNotesDisplay, LinkifiedText, ConsultationTypeTag } from '../../utils/appointmentFormatter';
 
 const { Title, Text } = Typography;
 
@@ -31,7 +34,13 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
   
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [unreadCounts, setUnreadCounts] = useState<Record<number, number>>({});
-  const [activeTab, setActiveTab] = useState<string>('overview');
+  const [selectedTimelineSlotModal, setSelectedTimelineSlotModal] = useState<any | null>(null);
+  const [selectedApptDetailsModal, setSelectedApptDetailsModal] = useState<Appointment | null>(null);
+  const [activeTab, setActiveTabState] = useState<string>(() => sessionStorage.getItem('patient_doctor_active_tab') || 'overview');
+  const setActiveTab = (tab: string) => {
+    sessionStorage.setItem('patient_doctor_active_tab', tab);
+    setActiveTabState(tab);
+  };
   const [bookingForm] = Form.useForm();
   
   const [selectedDate, setSelectedDate] = useState<dayjs.Dayjs | null>(null);
@@ -39,15 +48,53 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
   const [overrides, setOverrides] = useState<any[]>([]);
   const [doctorSchedule, setDoctorSchedule] = useState<any[]>([]);
   const [isNotificationsModalOpen, setIsNotificationsModalOpen] = useState(false);
+  const [patientConsultationNotes, setPatientConsultationNotes] = useState<any[]>([]);
+  const [loadingConsultationNotes, setLoadingConsultationNotes] = useState(false);
+  const [consultationNotesSearch, setConsultationNotesSearch] = useState('');
+  const [consultationNotesDate, setConsultationNotesDate] = useState<dayjs.Dayjs | null>(null);
+  const [selectedPatientNoteModal, setSelectedPatientNoteModal] = useState<any | null>(null);
   const [notifications, setNotifications] = useState<any[]>([]);
   
+  const [isRescheduleModalOpen, setIsRescheduleModalOpen] = useState(false);
+  const [reschedulingAppt, setReschedulingAppt] = useState<Appointment | null>(null);
+  const [rescheduleReason, setRescheduleReason] = useState<string>('Schedule conflict / Personal commitment');
+  const [isLateReschedule, setIsLateReschedule] = useState(false);
+  const [rescheduleSubmitting, setRescheduleSubmitting] = useState(false);
+
+  const [patientApptCategory, setPatientApptCategoryState] = useState<'upcoming' | 'history' | 'cancelled'>(() => {
+    return (sessionStorage.getItem('patient_appt_category') as any) || 'upcoming';
+  });
+  const setPatientApptCategory = (cat: 'upcoming' | 'history' | 'cancelled') => {
+    sessionStorage.setItem('patient_appt_category', cat);
+    setPatientApptCategoryState(cat);
+  };
+  const [patientApptFilterDate, setPatientApptFilterDate] = useState<dayjs.Dayjs | null>(null);
+  const [seenPatientCategories, setSeenPatientCategories] = useState<Set<string>>(new Set(['upcoming']));
+
+  const handlePatientCategoryChange = (cat: 'upcoming' | 'history' | 'cancelled') => {
+    setPatientApptCategory(cat);
+    setSeenPatientCategories(prev => {
+      const next = new Set(prev);
+      next.add(cat);
+      return next;
+    });
+  };
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
 
   const fetchDoctors = async () => {
     try {
       setLoading(true);
       const data = await patientApi.getDoctorsDirectory(currentUser.email);
       setDoctors(data);
+      const savedDocId = sessionStorage.getItem('patient_selected_doctor_id');
+      if (savedDocId) {
+        const match = data.find((d: any) => d.id === Number(savedDocId));
+        if (match) {
+          setSelectedDoctor(match);
+        }
+      }
     } catch (err) {
       console.error("Failed to load doctors", err);
       message.error("Failed to fetch doctors");
@@ -119,6 +166,19 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
     }
   }, [selectedDoctor, currentUser.email]);
 
+  const fetchPatientConsultationNotes = async () => {
+    if (!currentUser.email || !selectedDoctor) return;
+    try {
+      setLoadingConsultationNotes(true);
+      const data = await patientApi.getPatientConsultationNotes(currentUser.email, selectedDoctor.id);
+      setPatientConsultationNotes(data || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingConsultationNotes(false);
+    }
+  };
+
   const fetchDoctorData = async () => {
     if (!selectedDoctor) return;
     try {
@@ -135,6 +195,8 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
 
       const appointmentsData = await patientApi.getPatientAppointments(currentUser.email);
       setAppointments(appointmentsData);
+
+      fetchPatientConsultationNotes();
     } catch (e) {
       console.error(e);
     }
@@ -147,11 +209,13 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
     }
     try {
       await patientApi.bookAppointment({
+        email: currentUser.email,
         patient_email: currentUser.email,
         doctor_id: selectedDoctor.id,
         date: selectedDate.format('YYYY-MM-DD'),
         time: selectedTimeSlot,
-        notes: values.notes || ''
+        notes: values.notes || '',
+        consultation_type: values.consultation_type || 'online'
       });
       message.success("Appointment request sent successfully!");
       bookingForm.resetFields();
@@ -164,96 +228,187 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
     }
   };
 
-  const handleReschedule = async (apptId: number, currentDateStr: string) => {
-    const daysDiff = dayjs(currentDateStr).diff(dayjs(), 'day');
-    if (daysDiff < 3) {
-      message.error("You can only reschedule appointments at least 3 days in advance. Otherwise, it will be cancelled.");
+  const handleOpenReschedule = (appt: Appointment) => {
+    const apptDay = dayjs(appt.date).startOf('day');
+    const today = dayjs().startOf('day');
+    // Rule: You can only reschedule appointments at least before the appointment day in advance
+    const isAdvance = apptDay.isAfter(today);
+    
+    setReschedulingAppt(appt);
+    setIsLateReschedule(!isAdvance);
+    setRescheduleReason('Schedule conflict / Personal commitment');
+    setIsRescheduleModalOpen(true);
+  };
+
+  const handleConfirmReschedule = async () => {
+    if (!reschedulingAppt) return;
+    if (!rescheduleReason) {
+      message.warning("Please select a reason.");
       return;
     }
-    message.info("Please cancel this appointment and book a new one.");
+
+    try {
+      setRescheduleSubmitting(true);
+      await patientApi.cancelAppointment({
+        email: currentUser.email,
+        appointment_id: reschedulingAppt.id,
+        reason: rescheduleReason
+      });
+
+      message.success("Previous appointment cancelled. Please select a new date and time slot to complete your booking.");
+      setIsRescheduleModalOpen(false);
+      const prevDate = reschedulingAppt.date;
+      setReschedulingAppt(null);
+
+      // Refresh appointments and schedule
+      await fetchDoctorData();
+      
+      // Guide patient to booking tab and reset selected slot
+      setActiveTab('book');
+      setSelectedTimeSlot('');
+      if (prevDate && dayjs(prevDate).isAfter(dayjs().startOf('day'))) {
+        setSelectedDate(dayjs(prevDate));
+        bookingForm.setFieldsValue({ date: dayjs(prevDate) });
+      }
+    } catch (e: any) {
+      console.error(e);
+      message.error(e.message || "Failed to process reschedule");
+    } finally {
+      setRescheduleSubmitting(false);
+    }
   };
+
 
   const generateTimelineEvents = () => {
     if (!selectedDate) return [];
     const dateStr = selectedDate.format('YYYY-MM-DD');
-    const events: any[] = [];
-    
-    // 1. Add Overrides (Surgery/Break)
-    overrides.filter(o => o.date === dateStr).forEach(o => {
-        events.push({
-            type: 'override',
-            time: o.start_time,
-            endTime: o.end_time,
-            title: o.type === 'surgery' ? 'Surgery / Procedure' : 'Doctor Break',
-            reason: o.reason,
-            timestamp: new Date(`${dateStr}T${o.start_time}:00`).getTime(),
-            color: 'red'
-        });
-    });
+    const dayOfWeek = selectedDate.day(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
 
-    // 2. Add Standard Slots based on Weekly Schedule
-    const dayOfWeek = selectedDate.day();
+    // Find doctor's weekly timetable configuration for this day
     const scheduleForDay = doctorSchedule.find(s => {
       if (s.day_of_week !== dayOfWeek) return false;
       if (s.effective_start_date && selectedDate.isBefore(dayjs(s.effective_start_date), 'day')) return false;
       if (s.effective_end_date && selectedDate.isSameOrAfter(dayjs(s.effective_end_date), 'day')) return false;
       return true;
     });
-    
-    let standardSlots: string[] = [];
-    if (doctorSchedule.length === 0) {
-      // Fallback for doctors without a custom schedule
-      standardSlots = ['09:00', '10:00', '11:00', '13:00', '14:00', '15:00', '16:00'];
-    } else if (scheduleForDay) {
-      let currentSlot = dayjs(`${dateStr}T${scheduleForDay.start_time}:00`);
-      const endTime = dayjs(`${dateStr}T${scheduleForDay.end_time}:00`);
-      
-      while (currentSlot.isBefore(endTime) && currentSlot.add(1, 'hour').valueOf() <= endTime.valueOf()) {
-          standardSlots.push(currentSlot.format('HH:mm'));
-          currentSlot = currentSlot.add(1, 'hour');
-      }
+
+    const dayOverrides = overrides.filter(o => o.date === dateStr);
+    const events: any[] = [];
+    const nowMs = Date.now();
+
+    // If the doctor does NOT work on this day (Rest Day / Not in Weekly Timetable)
+    if (!scheduleForDay) {
+      // Display any special notices like whole-day outstation / conference
+      dayOverrides.forEach(ovr => {
+        const reasonText = ovr.reason || (ovr.type === 'surgery' ? 'Surgery' : 'Outstation / Blocked');
+        events.push({
+          type: 'override',
+          time: ovr.start_time,
+          endTime: ovr.end_time,
+          title: reasonText,
+          reason: reasonText,
+          timestamp: new Date(`${dateStr}T${ovr.start_time}:00`).getTime(),
+          color: 'red'
+        });
+      });
+      return events.sort((a, b) => a.timestamp - b.timestamp);
     }
 
-    // Remove slots that have already passed
-    const nowMs = Date.now();
-    standardSlots = standardSlots.filter(slot => {
-       const slotStartMs = new Date(`${dateStr}T${slot}:00`).getTime();
-       return slotStartMs > nowMs;
-    });
+    // Generate 1-hour slots strictly within the doctor's weekly practice hours [start_time, end_time]
+    let currentSlot = dayjs(`${dateStr}T${scheduleForDay.start_time}:00`);
+    const endTime = dayjs(`${dateStr}T${scheduleForDay.end_time}:00`);
 
-    standardSlots.forEach(slot => {
-      const slotStartMs = new Date(`${dateStr}T${slot}:00`).getTime();
-      const slotEndMs = slotStartMs + (60 * 60 * 1000);
-      
-      const isBooked = appointments.some(a => a.doctor_id === selectedDoctor?.id && a.date === dateStr && a.time === slot && a.status !== 'cancelled');
-      
-      const blockingOverride = overrides.find(o => {
-        if (o.date !== dateStr) return false;
-        const surgeryStartMs = new Date(`${dateStr}T${o.start_time}`).getTime();
-        const surgeryEndMs = new Date(`${dateStr}T${o.end_time}`).getTime() + (30 * 60 * 1000);
-        return slotStartMs < surgeryEndMs && slotEndMs > surgeryStartMs;
+    while (currentSlot.isBefore(endTime) && currentSlot.add(1, 'hour').valueOf() <= endTime.valueOf()) {
+      const slotStartStr = currentSlot.format('HH:mm');
+      const slotEndStr = currentSlot.add(1, 'hour').format('HH:mm');
+      const slotStartMs = currentSlot.valueOf();
+      const slotEndMs = currentSlot.add(1, 'hour').valueOf();
+
+      // 1. Check if doctor is on Surgery, Outstation, or Break during this time
+      const matchingOverride = dayOverrides.find(o => {
+        const ovrStartMs = new Date(`${dateStr}T${o.start_time}:00`).getTime();
+        const ovrEndMs = new Date(`${dateStr}T${o.end_time}:00`).getTime();
+        return slotStartMs < ovrEndMs && slotEndMs > ovrStartMs;
       });
 
-      if (isBooked) {
-          events.push({
-            type: 'booked',
-            time: slot,
-            endTime: dayjs(`${dateStr}T${slot}:00`).add(1, 'hour').format('HH:mm'),
-            title: 'Slot Booked',
-            timestamp: slotStartMs,
-            color: 'gray'
-          });
-      } else if (!blockingOverride) {
-          events.push({
-            type: 'available',
-            time: slot,
-            endTime: dayjs(`${dateStr}T${slot}:00`).add(1, 'hour').format('HH:mm'),
-            title: 'Available for Booking',
-            timestamp: slotStartMs,
-            color: 'green'
-          });
+      // 2. Check if current patient booked this slot
+      const myBooking = appointments.find(a => 
+        a.doctor_id === selectedDoctor?.id && 
+        a.date === dateStr && 
+        a.time === slotStartStr && 
+        a.status !== 'cancelled'
+      );
+
+      // 3. Check if any other patient booked this slot
+      const isBooked = !!myBooking || appointments.some(a => 
+        a.doctor_id === selectedDoctor?.id && 
+        a.date === dateStr && 
+        a.time === slotStartStr && 
+        a.status !== 'cancelled'
+      );
+
+      // 4. Check if the time slot has already passed
+      const isPast = slotEndMs <= nowMs;
+
+      if (myBooking) {
+        const isConf = (myBooking.status || '').toLowerCase() === 'confirmed';
+        events.push({
+          type: 'my_booking',
+          time: slotStartStr,
+          endTime: slotEndStr,
+          title: `Your Booking (${(myBooking.status || 'Pending').toUpperCase()})`,
+          reason: myBooking.notes || 'Your active appointment slot',
+          timestamp: slotStartMs,
+          color: isConf ? 'blue' : 'gold',
+          data: myBooking,
+          override: matchingOverride
+        });
+      } else if (matchingOverride) {
+        const reasonText = matchingOverride.reason || (matchingOverride.type === 'surgery' ? 'Surgery' : 'Doctor Outstation');
+        events.push({
+          type: 'override',
+          time: slotStartStr,
+          endTime: slotEndStr,
+          title: reasonText,
+          reason: reasonText,
+          timestamp: slotStartMs,
+          color: 'red',
+          data: matchingOverride
+        });
+      } else if (isBooked) {
+        events.push({
+          type: 'booked',
+          time: slotStartStr,
+          endTime: slotEndStr,
+          title: 'Already Booked',
+          reason: 'Slot is reserved by another patient',
+          timestamp: slotStartMs,
+          color: 'gray'
+        });
+      } else if (isPast) {
+        events.push({
+          type: 'past',
+          time: slotStartStr,
+          endTime: slotEndStr,
+          title: 'Past Time Slot',
+          reason: 'Time passed',
+          timestamp: slotStartMs,
+          color: 'gray'
+        });
+      } else {
+        events.push({
+          type: 'available',
+          time: slotStartStr,
+          endTime: slotEndStr,
+          title: 'Available for Booking',
+          reason: 'Click to select this slot',
+          timestamp: slotStartMs,
+          color: 'green'
+        });
       }
-    });
+
+      currentSlot = currentSlot.add(1, 'hour');
+    }
 
     return events.sort((a, b) => a.timestamp - b.timestamp);
   };
@@ -297,8 +452,8 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
 
   const handleDeleteMessage = async (msgId: number) => {
     try {
-      await chatApi.deleteMessage({ message_id: msgId, sender_email: currentUser.email });
-      setChatHistory(prev => prev.map(m => m.id === msgId ? { ...m, is_deleted: 1, content: null, file_name: null } : m));
+      await chatApi.deleteMessage({ message_id: msgId, sender_email: currentUser.email, email: currentUser.email });
+      setChatHistory(prev => prev.map(m => m.id === msgId ? { ...m, is_deleted: 1, content: null, file_name: null, file_type: null } : m));
       message.success("Message deleted");
     } catch (e: any) {
       console.error(e);
@@ -327,7 +482,10 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                   <List.Item
                     className={`cursor-pointer transition-colors border-b ${isDarkMode ? 'border-slate-800 hover:bg-slate-800' : 'border-slate-100 hover:bg-slate-50'} ${selectedDoctor?.id === doctor.id ? (isDarkMode ? 'bg-blue-900/20' : 'bg-blue-50') : ''}`}
                     style={{ padding: '16px 24px' }}
-                    onClick={() => setSelectedDoctor(doctor)}
+                    onClick={() => {
+                      sessionStorage.setItem('patient_selected_doctor_id', String(doctor.id));
+                      setSelectedDoctor(doctor);
+                    }}
                   >
                     <List.Item.Meta
                       className="items-center"
@@ -405,6 +563,7 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                   } 
                   key="chat" 
                 />
+                <Tabs.TabPane tab="Consultation Notes" key="consultation_notes" />
               </Tabs>
 
               {/* Tab Contents */}
@@ -423,7 +582,11 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                         </div>
                         <div>
                           <Text className="text-xs text-slate-400 block mb-1">Consultation Notes (e.g. Links)</Text>
-                          <Text className="font-medium whitespace-pre-wrap">{selectedDoctor.consultation_hours || 'Not set'}</Text>
+                          {selectedDoctor.consultation_hours ? (
+                            <LinkifiedText text={selectedDoctor.consultation_hours} className="text-sm font-medium" />
+                          ) : (
+                            <Text className="text-slate-400 italic text-sm">Not set</Text>
+                          )}
                         </div>
                         <div>
                           <Text className="text-xs text-slate-400 block mb-2">Weekly Timetable</Text>
@@ -447,119 +610,327 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                         </div>
                       </div>
                     </div>
-
-                    <Divider />
-                    
-                    <div className="flex items-center justify-between bg-blue-50/50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-100 dark:border-blue-900">
-                      <div>
-                        <Title level={5} className="!m-0 text-blue-800 dark:text-blue-300">Share Health Records</Title>
-                        <Text className="text-xs text-blue-600 dark:text-blue-400">
-                          Grant this doctor permission to view your clinical diagnostics and screening history.
-                        </Text>
-                      </div>
-                      <Switch 
-                        checked={selectedDoctor.has_permission} 
-                        onChange={(checked) => handleTogglePermission(selectedDoctor.id, checked)}
-                      />
-                    </div>
                   </div>
                 )}
 
                 {activeTab === 'book' && (
                   <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
                     <Card title="Request Appointment" size="small" className="shadow-sm">
-                      <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
-                        <Text className="text-xs text-blue-600 dark:text-blue-400 font-semibold block mb-1"><ClockCircleOutlined /> Doctor's Timetable</Text>
-                        <Text className="text-sm text-blue-800 dark:text-blue-200 whitespace-pre-wrap">{selectedDoctor.consultation_hours || 'Not set'}</Text>
-                      </div>
                       <Form form={bookingForm} layout="vertical" onFinish={handleBookAppointment}>
                         <Form.Item label="Date" name="date" rules={[{ required: true }]}>
                           <DatePicker 
                             className="w-full" 
                             disabledDate={(current) => current && current < dayjs().startOf('day')}
                             onChange={(date) => { setSelectedDate(date); setSelectedTimeSlot(''); }}
+                            cellRender={(current, info) => {
+                              if (info.type !== 'date') return info.originNode;
+                              const dateStr = dayjs(current).format('YYYY-MM-DD');
+                              const dayAppts = appointments.filter(a => a.doctor_id === selectedDoctor.id && a.date === dateStr && a.status !== 'cancelled');
+                              if (dayAppts.length > 0) {
+                                return (
+                                  <div className="ant-picker-cell-inner relative flex flex-col items-center justify-center">
+                                    <span>{dayjs(current).date()}</span>
+                                    <span 
+                                      className="w-1.5 h-1.5 rounded-full bg-blue-500 absolute bottom-0.5" 
+                                      title={`You have ${dayAppts.length} active booking(s)`}
+                                    />
+                                  </div>
+                                );
+                              }
+                              return info.originNode;
+                            }}
                           />
                         </Form.Item>
                         {selectedDate && (
                           <div className="mb-4">
-                            <Text className="block mb-4 font-semibold text-slate-600">Daily Schedule Timeline</Text>
-                            <div className="max-h-[300px] overflow-y-auto pr-4 custom-scrollbar">
+                            <div className="flex justify-between items-center mb-3">
+                              <Text className="font-semibold text-slate-700 dark:text-slate-200">Daily Schedule Timeline</Text>
+                              {selectedTimeSlot && (
+                                <Button 
+                                  size="small" 
+                                  danger 
+                                  type="link" 
+                                  className="p-0 text-xs"
+                                  onClick={() => setSelectedTimeSlot('')}
+                                >
+                                  Clear Selection
+                                </Button>
+                              )}
+                            </div>
+
+                            {selectedTimeSlot && (
+                              <div className="mb-3 p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg flex justify-between items-center animate-fadeIn">
+                                <div>
+                                  <Text className="text-xs font-semibold text-emerald-800 dark:text-emerald-300 block">Selected Time Slot:</Text>
+                                  <Text className="text-sm font-bold text-emerald-900 dark:text-emerald-100">{selectedTimeSlot} on {selectedDate?.format('YYYY-MM-DD')}</Text>
+                                </div>
+                                <Tag color="green">Ready to Book</Tag>
+                              </div>
+                            )}
+
+                            <div className="max-h-[320px] overflow-y-auto pr-4 custom-scrollbar">
                               <Timeline 
                                 items={generateTimelineEvents().map(ev => ({
                                   color: ev.color,
                                   children: (
-                                    <div className={`p-3 rounded-lg border flex justify-between items-center transition-all ${
-                                      selectedTimeSlot === ev.time ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-slate-100 hover:border-slate-300'
-                                    }`}>
+                                    <div 
+                                      className={`p-3 rounded-lg border flex justify-between items-center transition-all cursor-pointer ${
+                                        selectedTimeSlot === ev.time ? 'border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/30 shadow-sm ring-1 ring-emerald-400' : 'border-slate-100 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                                      }`}
+                                      onClick={() => setSelectedTimelineSlotModal(ev)}
+                                    >
                                       <div>
-                                        <Text className="font-semibold block">{ev.time} - {ev.endTime}</Text>
-                                        <Text className={`text-xs ${ev.color === 'red' ? 'text-red-500 font-medium' : 'text-slate-500'}`}>
-                                          {ev.title} {ev.reason && `(${ev.reason})`}
+                                        <div className="flex items-center gap-2">
+                                          <Text className="font-semibold block">{ev.time} - {ev.endTime}</Text>
+                                          {ev.type === 'my_booking' && (
+                                            <Tag color="blue" className="m-0 text-[10px] font-bold uppercase border-0">
+                                              Your Booking
+                                            </Tag>
+                                          )}
+                                        </div>
+                                        <Text className={`text-xs ${ev.color === 'red' ? 'text-red-500 font-medium' : ev.color === 'blue' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-500'}`}>
+                                          {ev.title}
                                         </Text>
                                       </div>
-                                      {ev.type === 'available' && (
-                                        <Button 
-                                          type={selectedTimeSlot === ev.time ? 'primary' : 'default'} 
-                                          size="small"
-                                          onClick={() => setSelectedTimeSlot(ev.time)}
-                                        >
-                                          {selectedTimeSlot === ev.time ? 'Selected' : 'Select'}
-                                        </Button>
-                                      )}
-                                      {ev.type === 'override' && (
-                                        <Tag color="red" className="m-0 border-0">Blocked</Tag>
-                                      )}
-                                      {ev.type === 'booked' && (
-                                        <Tag color="default" className="m-0 border-0">Unavailable</Tag>
-                                      )}
+                                      
+                                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                                        {ev.type === 'available' && (
+                                          <Button 
+                                            type={selectedTimeSlot === ev.time ? 'primary' : 'default'} 
+                                            size="small"
+                                            className={selectedTimeSlot === ev.time ? 'bg-emerald-600 hover:bg-emerald-500 border-0' : ''}
+                                            onClick={() => setSelectedTimeSlot(prev => prev === ev.time ? '' : ev.time)}
+                                          >
+                                            {selectedTimeSlot === ev.time ? 'Selected ✓' : 'Select'}
+                                          </Button>
+                                        )}
+                                        {ev.type === 'override' && (
+                                          <Tag color="red" className="m-0 border-0 font-semibold">{ev.title || 'Blocked'}</Tag>
+                                        )}
+                                        {ev.type === 'booked' && (
+                                          <Tag color="default" className="m-0 border-0">Already Booked</Tag>
+                                        )}
+                                        {ev.type === 'past' && (
+                                          <Tag color="default" className="m-0 border-0">Past Slot</Tag>
+                                        )}
+                                      </div>
                                     </div>
                                   )
                                 }))}
                               />
                             </div>
                             {generateTimelineEvents().length === 0 && (
-                              <Empty description="No schedule available for this date" />
+                              <Empty description="No practicing hours configured for this day (Doctor's Rest Day)." />
                             )}
                           </div>
                         )}
-                        <Form.Item label="Notes / Reason for visit" name="notes">
-                          <Input.TextArea rows={3} />
+
+                        <Form.Item 
+                          label={<span className="font-semibold text-xs text-slate-700 dark:text-slate-300">Consultation Format</span>} 
+                          name="consultation_type" 
+                          initialValue="online"
+                        >
+                          <Radio.Group className="w-full grid grid-cols-2 gap-3" buttonStyle="solid">
+                            <Radio.Button value="online" className="text-center h-auto py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 border border-slate-200 dark:border-slate-700">
+                              <VideoCameraOutlined className="text-purple-500 text-base" />
+                              <div className="text-left leading-tight">
+                                <div className="font-bold text-xs">Online Video</div>
+                                <div className="text-[10px] text-slate-400">Zoom / Meeting Link</div>
+                              </div>
+                            </Radio.Button>
+                            <Radio.Button value="physical" className="text-center h-auto py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 border border-slate-200 dark:border-slate-700">
+                              <EnvironmentOutlined className="text-cyan-500 text-base" />
+                              <div className="text-left leading-tight">
+                                <div className="font-bold text-xs">Physical In-Clinic</div>
+                                <div className="text-[10px] text-slate-400 truncate max-w-[110px]">{selectedDoctor.clinic_name || 'Clinic Visit'}</div>
+                              </div>
+                            </Radio.Button>
+                          </Radio.Group>
                         </Form.Item>
-                        <Button type="primary" htmlType="submit" block disabled={!selectedTimeSlot}>Request Booking</Button>
+
+                        <Form.Item label="Notes / Reason for visit" name="notes">
+                          <Input.TextArea rows={3} placeholder="Optional notes for the doctor (e.g. symptoms)..." />
+                        </Form.Item>
+                        <Button type="primary" htmlType="submit" block size="large" className="bg-emerald-600 hover:bg-emerald-500 border-0" disabled={!selectedTimeSlot}>
+                          {selectedTimeSlot ? `Request Booking for ${selectedTimeSlot}` : 'Select a Time Slot to Book'}
+                        </Button>
                       </Form>
                     </Card>
                     
-                    <div>
-                      <Title level={5} className="!mb-4 text-slate-500">Your Appointments with {selectedDoctor.name}</Title>
-                      {appointments.filter(a => a.doctor_id === selectedDoctor.id).length === 0 ? (
-                        <Text className="text-slate-400">No appointments found.</Text>
-                      ) : (
-                        <div className="space-y-3 max-h-[400px] overflow-y-auto">
-                          {appointments.filter(a => a.doctor_id === selectedDoctor.id).map(appt => (
-                            <Card key={appt.id} size="small" className="border-slate-200">
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  <Text className="font-semibold block"><CalendarOutlined /> {appt.date}</Text>
-                                  <Text className="text-xs text-slate-500"><ClockCircleOutlined /> {appt.time}</Text>
-                                </div>
-                                <div className="text-right">
-                                  <Tag color={appt.status === 'confirmed' ? 'green' : appt.status === 'cancelled' ? 'red' : 'default'} className="block mb-2">
-                                    {appt.status.toUpperCase()}
+                    <div className="w-full space-y-3">
+                      {(() => {
+                        const doctorAppointments = appointments.filter(a => a.doctor_id === selectedDoctor.id);
+                        const todayStart = dayjs().startOf('day');
+                        const allUpcoming = doctorAppointments.filter(a => a.status !== 'cancelled' && !dayjs(a.date).startOf('day').isBefore(todayStart));
+                        const allHistory = doctorAppointments.filter(a => a.status !== 'cancelled' && dayjs(a.date).startOf('day').isBefore(todayStart));
+                        const allCancelled = doctorAppointments.filter(a => a.status === 'cancelled');
+
+                        const filterDateStr = patientApptFilterDate ? patientApptFilterDate.format('YYYY-MM-DD') : null;
+                        const upcoming = filterDateStr ? allUpcoming.filter(a => a.date === filterDateStr) : allUpcoming;
+                        const history = filterDateStr ? allHistory.filter(a => a.date === filterDateStr) : allHistory;
+                        const cancelled = filterDateStr ? allCancelled.filter(a => a.date === filterDateStr) : allCancelled;
+
+                        const displayed = patientApptCategory === 'upcoming' ? upcoming : patientApptCategory === 'history' ? history : cancelled;
+
+                        return (
+                          <>
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <Title level={5} className="!mb-0 text-slate-700 dark:text-slate-200">
+                                Your Appointments with {selectedDoctor.name}
+                              </Title>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <DatePicker 
+                                  placeholder="Filter by Date" 
+                                  size="small" 
+                                  className="w-36 text-xs" 
+                                  value={patientApptFilterDate}
+                                  onChange={(d) => setPatientApptFilterDate(d)}
+                                  allowClear
+                                  cellRender={(current, info) => {
+                                    if (info.type !== 'date') return info.originNode;
+                                    const dateStr = dayjs(current).format('YYYY-MM-DD');
+                                    const dayAppts = doctorAppointments.filter(a => a.date === dateStr);
+                                    if (dayAppts.length > 0) {
+                                      const hasUpcoming = dayAppts.some(a => a.status !== 'cancelled');
+                                      const dotBg = hasUpcoming ? 'bg-emerald-500' : 'bg-red-500';
+                                      return (
+                                        <div className="ant-picker-cell-inner relative flex flex-col items-center justify-center">
+                                          <span>{dayjs(current).date()}</span>
+                                          <span 
+                                            className={`w-1.5 h-1.5 rounded-full ${dotBg} absolute bottom-0.5`} 
+                                            title={`${dayAppts.length} appointment(s)`}
+                                          />
+                                        </div>
+                                      );
+                                    }
+                                    return info.originNode;
+                                  }}
+                                />
+                                {patientApptFilterDate && (
+                                  <Tag color="cyan" className="rounded-full text-xs m-0">
+                                    {displayed.length} on {patientApptFilterDate.format('YYYY-MM-DD')}
                                   </Tag>
-                                  {appt.status !== 'cancelled' && (
-                                    <Button size="small" onClick={() => handleReschedule(appt.id, appt.date)}>
-                                      Reschedule
-                                    </Button>
-                                  )}
-                                </div>
+                                )}
                               </div>
-                            </Card>
-                          ))}
-                        </div>
-                      )}
+                            </div>
+
+                            <Segmented
+                              block
+                              value={patientApptCategory}
+                              onChange={(val) => setPatientApptCategory(val as any)}
+                              options={[
+                                {
+                                  label: (
+                                    <div className="flex items-center justify-center gap-1.5 py-0.5">
+                                      <CalendarOutlined />
+                                      <span>Upcoming</span>
+                                    </div>
+                                  ),
+                                  value: 'upcoming',
+                                },
+                                {
+                                  label: (
+                                    <div className="flex items-center justify-center gap-1.5 py-0.5">
+                                      <HistoryOutlined />
+                                      <span>History</span>
+                                    </div>
+                                  ),
+                                  value: 'history',
+                                },
+                                {
+                                  label: (
+                                    <div className="flex items-center justify-center gap-1.5 py-0.5">
+                                      <StopOutlined />
+                                      <span>Cancelled</span>
+                                    </div>
+                                  ),
+                                  value: 'cancelled',
+                                },
+                              ]}
+                            />
+
+                            {displayed.length === 0 ? (
+                              <div className="p-6 text-center border rounded-xl border-dashed border-slate-200 dark:border-slate-700">
+                                <Text className="text-slate-400">
+                                  {patientApptFilterDate 
+                                    ? `No ${patientApptCategory} appointments found for ${patientApptFilterDate.format('YYYY-MM-DD')}.`
+                                    : `No ${patientApptCategory} appointments with this doctor.`}
+                                </Text>
+                              </div>
+                            ) : (
+                              <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1 custom-scrollbar">
+                                {displayed.map(appt => {
+                                  const isConfirmed = appt.status?.toLowerCase() === 'confirmed';
+                                  const isCancelled = appt.status?.toLowerCase() === 'cancelled';
+                                  return (
+                                    <div 
+                                      key={appt.id} 
+                                      onClick={() => setSelectedApptDetailsModal(appt)}
+                                      className={`p-3.5 rounded-xl border flex flex-col gap-2 transition-all cursor-pointer duration-150 hover:shadow-md hover:border-blue-400 active:scale-[0.99] ${
+                                        isDarkMode ? 'bg-slate-800/60 border-slate-700/80 hover:bg-slate-800' : 'bg-white border-slate-200 hover:bg-blue-50/20 shadow-xs'
+                                      }`}
+                                    >
+                                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <Tag color="blue" className="rounded-md border-0 px-2 py-0.5 text-xs font-semibold m-0 flex items-center">
+                                            <CalendarOutlined className="mr-1" /> {appt.date}
+                                          </Tag>
+                                          <Tag color="cyan" className="rounded-md border-0 px-2 py-0.5 text-xs font-semibold m-0 flex items-center">
+                                            <ClockCircleOutlined className="mr-1" /> {appt.time}
+                                          </Tag>
+                                          <ConsultationTypeTag type={appt.consultation_type} />
+                                        </div>
+                                        <div className="flex items-center gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                                          <Tag 
+                                            color={isConfirmed ? 'green' : isCancelled ? 'red' : 'gold'} 
+                                            className="font-bold text-xs px-2.5 py-0.5 rounded-full border-0 m-0 uppercase"
+                                          >
+                                            {appt.status}
+                                          </Tag>
+                                          {!isCancelled && patientApptCategory === 'upcoming' && (
+                                            <Button 
+                                              size="small" 
+                                              type="dashed" 
+                                              className="text-xs h-7 px-2.5" 
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleOpenReschedule(appt);
+                                              }}
+                                            >
+                                              Reschedule
+                                            </Button>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      {/* Compact note & reason preview */}
+                                      <AppointmentNotesDisplay 
+                                        notes={appt.notes} 
+                                        status={appt.status} 
+                                        reason={appt.reason} 
+                                        consultationType={appt.consultation_type}
+                                        doctorNotes={appt.consultation_hours || selectedDoctor.consultation_hours}
+                                        clinicName={appt.clinic_name || selectedDoctor.clinic_name}
+                                        isDarkMode={isDarkMode} 
+                                        compact={true}
+                                        className="mt-1"
+                                      />
+
+                                      <div className="text-[10px] text-blue-500/80 hover:text-blue-500 font-medium flex items-center justify-end gap-1 mt-0.5 pt-1 border-t border-slate-100 dark:border-slate-800">
+                                        <EyeOutlined /> Click card for full details
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                 )}
+
 
                 {activeTab === 'chat' && (
                   <>
@@ -599,47 +970,80 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                           </div>
                         )}
                         <div className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-                          <div className={`max-w-[70%] rounded-2xl p-3 relative group ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : (isDarkMode ? 'bg-slate-800 text-white rounded-tl-none' : 'bg-white border text-slate-800 rounded-tl-none')}`}>
+                          <div className={`max-w-[70%] rounded-2xl p-3 relative group transition-all ${
+                            msg.is_deleted
+                              ? (isDarkMode 
+                                  ? 'bg-slate-900/70 border border-slate-800 text-slate-400 rounded-2xl shadow-none' 
+                                  : 'bg-slate-100/90 border border-slate-200 text-slate-500 rounded-2xl shadow-none')
+                              : isMe 
+                                ? 'bg-blue-600 text-white rounded-tr-none shadow-xs' 
+                                : (isDarkMode ? 'bg-slate-800 text-white rounded-tl-none shadow-xs' : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none shadow-xs')
+                          }`}>
                             {msg.is_deleted ? (
-                            <Text className="italic text-slate-300">This message was deleted</Text>
-                          ) : (
-                            <>
-                              {msg.content && <div>{msg.content}</div>}
-                              {msg.file_name && (
-                                <div className="mt-2">
-                                  {msg.file_type?.startsWith('image/') ? (
-                                    <Image src={`http://localhost:8000/api/chat/file/${msg.id}`} alt="attachment" className="max-w-full rounded-lg" style={{ maxHeight: 200 }} />
-                                  ) : msg.file_type?.startsWith('video/') ? (
-                                    <video src={`http://localhost:8000/api/chat/file/${msg.id}`} controls className="max-w-full rounded-lg" style={{ maxHeight: 200 }} />
-                                  ) : (
-                                    <a href={`http://localhost:8000/api/chat/file/${msg.id}`} target="_blank" rel="noreferrer" className={`flex items-center gap-2 underline ${isMe ? 'text-blue-100' : 'text-blue-600'}`}>
-                                      <PaperClipOutlined /> {msg.file_name}
-                                    </a>
+                              <div className="flex items-center gap-2 text-xs select-none">
+                                <StopOutlined className="text-slate-400 flex-shrink-0 text-sm" />
+                                <span className="italic">
+                                  {isMe ? "You deleted this message" : "This message was deleted"}
+                                </span>
+                                <span className="text-[10px] ml-1.5 opacity-60 not-italic">
+                                  {new Date(msg.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                </span>
+                              </div>
+                            ) : (
+                              <>
+                                {msg.content && <div>{msg.content}</div>}
+                                {msg.file_name && (
+                                  <div className="mt-2">
+                                    {msg.file_type?.startsWith('image/') ? (
+                                      <Image src={`http://localhost:8000/api/chat/file/${msg.id}`} alt="attachment" className="max-w-full rounded-lg" style={{ maxHeight: 200 }} />
+                                    ) : msg.file_type?.startsWith('video/') ? (
+                                      <video src={`http://localhost:8000/api/chat/file/${msg.id}`} controls className="max-w-full rounded-lg" style={{ maxHeight: 200 }} />
+                                    ) : (
+                                      <a href={`http://localhost:8000/api/chat/file/${msg.id}`} target="_blank" rel="noreferrer" className={`flex items-center gap-2 underline ${isMe ? 'text-blue-100' : 'text-blue-600'}`}>
+                                        <PaperClipOutlined /> {msg.file_name}
+                                      </a>
+                                    )}
+                                  </div>
+                                )}
+                                <div className={`text-[10px] mt-1 text-right opacity-70 flex items-center justify-end gap-1`}>
+                                  {new Date(msg.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                  {isMe && (
+                                    msg.is_read ? (
+                                      <div className="flex" style={{ marginLeft: 2, marginRight: -2 }}>
+                                        <CheckOutlined className="text-blue-200" style={{ fontSize: '10px' }} />
+                                        <CheckOutlined className="text-blue-200" style={{ fontSize: '10px', marginLeft: -4 }} />
+                                      </div>
+                                    ) : (
+                                      <CheckOutlined className="text-slate-300" style={{ fontSize: '10px', marginLeft: 2 }} />
+                                    )
                                   )}
                                 </div>
-                              )}
-                              <div className={`text-[10px] mt-1 text-right opacity-70 flex items-center justify-end gap-1`}>
-                                {new Date(msg.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                                 {isMe && (
-                                  msg.is_read ? (
-                                    <div className="flex" style={{ marginLeft: 2, marginRight: -2 }}>
-                                      <CheckOutlined className="text-blue-200" style={{ fontSize: '10px' }} />
-                                      <CheckOutlined className="text-blue-200" style={{ fontSize: '10px', marginLeft: -4 }} />
-                                    </div>
-                                  ) : (
-                                    <CheckOutlined className="text-slate-300" style={{ fontSize: '10px', marginLeft: 2 }} />
-                                  )
+                                  <div className="absolute top-2 -left-9 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <Popconfirm
+                                      title="Delete message?"
+                                      description="Are you sure you want to delete this message?"
+                                      onConfirm={() => handleDeleteMessage(msg.id)}
+                                      okText="Delete"
+                                      cancelText="Cancel"
+                                      okButtonProps={{ danger: true, size: 'small' }}
+                                      cancelButtonProps={{ size: 'small' }}
+                                      placement="left"
+                                    >
+                                      <Button 
+                                        type="text" 
+                                        size="small" 
+                                        danger 
+                                        className="hover:bg-red-50 dark:hover:bg-red-950/40 rounded-full w-7 h-7 flex items-center justify-center p-0"
+                                        icon={<DeleteOutlined />} 
+                                      />
+                                    </Popconfirm>
+                                  </div>
                                 )}
-                              </div>
-                              {isMe && (
-                                <div className="absolute top-2 -left-8 opacity-0 group-hover:opacity-100 transition-opacity">
-                                  <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteMessage(msg.id)} />
-                                </div>
-                              )}
-                            </>
-                          )}
+                              </>
+                            )}
+                          </div>
                         </div>
-                      </div>
                       </React.Fragment>
                     );
                   })
@@ -695,6 +1099,138 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                   </div>
                 </>
               )}
+
+              {activeTab === 'consultation_notes' && (
+                <div className="p-6 max-w-4xl space-y-5 flex-1 flex flex-col min-h-0 overflow-y-auto custom-scrollbar">
+                  {/* Header Banner */}
+                  <div className={`p-4 rounded-xl border flex items-center justify-between gap-4 ${
+                    isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'
+                  }`}>
+                    <div>
+                      <Title level={5} className={`!m-0 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
+                        Consultation Notes & Records
+                      </Title>
+                      <Text className="text-xs text-slate-400">
+                        Official clinical observations, diagnosis, and treatment suggestions recorded by Dr. {selectedDoctor.name}.
+                      </Text>
+                    </div>
+                    <Tag color="blue" className="rounded-full text-xs font-semibold m-0">
+                      {patientConsultationNotes.length} notes
+                    </Tag>
+                  </div>
+
+                  {/* Filter bar */}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <Input
+                      prefix={<SearchOutlined className="text-slate-400 mr-1" />}
+                      placeholder="Search diagnosis or treatment..."
+                      value={consultationNotesSearch}
+                      onChange={(e) => setConsultationNotesSearch(e.target.value)}
+                      allowClear
+                      className={`flex-1 rounded-xl min-w-[200px] ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200'}`}
+                    />
+                    <DatePicker
+                      value={consultationNotesDate}
+                      onChange={(d) => setConsultationNotesDate(d)}
+                      placeholder="Filter by date..."
+                      className="rounded-xl w-44"
+                      allowClear
+                    />
+                    {(consultationNotesSearch || consultationNotesDate) && (
+                      <Button 
+                        onClick={() => {
+                          setConsultationNotesSearch('');
+                          setConsultationNotesDate(null);
+                        }}
+                        className="rounded-xl text-xs"
+                      >
+                        Clear
+                      </Button>
+                    )}
+                  </div>
+
+                  {/* Notes List */}
+                  {loadingConsultationNotes ? (
+                    <div className="py-12 flex justify-center"><Spin /></div>
+                  ) : (() => {
+                    const filtered = patientConsultationNotes.filter(n => {
+                      const q = consultationNotesSearch.toLowerCase();
+                      const matchSearch = !q || (n.diagnosis || '').toLowerCase().includes(q) || (n.treatment || '').toLowerCase().includes(q);
+                      const matchDate = !consultationNotesDate || n.date === consultationNotesDate.format('YYYY-MM-DD');
+                      return matchSearch && matchDate;
+                    });
+
+                    if (filtered.length === 0) {
+                      return (
+                        <div className={`p-10 rounded-2xl border text-center ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}>
+                          <Empty 
+                            description={
+                              <span className={isDarkMode ? 'text-slate-400' : 'text-slate-500'}>
+                                {consultationNotesSearch || consultationNotesDate
+                                  ? 'No consultation notes matching your filters.'
+                                  : `No consultation notes recorded by Dr. ${selectedDoctor.name} yet.`}
+                              </span>
+                            } 
+                          />
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-3">
+                        {filtered.map(note => (
+                          <div
+                            key={note.id}
+                            onClick={() => setSelectedPatientNoteModal(note)}
+                            className={`p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all duration-150 cursor-pointer hover:shadow-md hover:border-blue-400 active:scale-[0.99] ${
+                              isDarkMode ? 'bg-slate-900/80 border-slate-800 hover:bg-slate-900' : 'bg-white border-slate-200/80 hover:bg-blue-50/20 shadow-xs'
+                            }`}
+                          >
+                            <div className="flex-1 min-w-0 space-y-1.5">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <Tag color="blue" className="rounded-md border-0 px-2 py-0.5 text-xs font-semibold m-0 flex items-center">
+                                  <CalendarOutlined className="mr-1" /> {note.date}
+                                </Tag>
+                                <Tag color="cyan" className="rounded-md border-0 px-2 py-0.5 text-xs font-semibold m-0 flex items-center">
+                                  <ClockCircleOutlined className="mr-1" /> {note.time}
+                                </Tag>
+                                <span className="text-xs text-slate-400">
+                                  Dr. {selectedDoctor.name}
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-0.5">
+                                {note.diagnosis && (
+                                  <div className="text-xs text-slate-700 dark:text-slate-300 line-clamp-2">
+                                    <strong className="text-slate-500 dark:text-slate-400">Diagnosis:</strong> {note.diagnosis}
+                                  </div>
+                                )}
+                                {note.treatment && (
+                                  <div className="text-xs text-slate-600 dark:text-slate-400 line-clamp-2">
+                                    <strong className="text-emerald-600 dark:text-emerald-400">Treatment / Advice:</strong> {note.treatment}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 flex-shrink-0 self-end md:self-center" onClick={(e) => e.stopPropagation()}>
+                              <Button
+                                type="link"
+                                size="small"
+                                icon={<EyeOutlined />}
+                                onClick={() => setSelectedPatientNoteModal(note)}
+                                className="text-xs font-semibold text-blue-600 dark:text-blue-400"
+                              >
+                                View Details
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
             </>
           ) : (
@@ -727,6 +1263,368 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
           )}
         </div>
       </Modal>
+
+      {/* Reschedule / Cancellation Reason Modal */}
+      <Modal
+        title={
+          <div className="flex items-center gap-2">
+            {isLateReschedule ? (
+              <ExclamationCircleOutlined className="text-amber-500 text-lg" />
+            ) : (
+              <CalendarOutlined className="text-blue-500 text-lg" />
+            )}
+            <span>{isLateReschedule ? "Appointment Cancellation Notice" : "Reschedule Appointment"}</span>
+          </div>
+        }
+        open={isRescheduleModalOpen}
+        onCancel={() => {
+          if (!rescheduleSubmitting) {
+            setIsRescheduleModalOpen(false);
+            setReschedulingAppt(null);
+          }
+        }}
+        footer={[
+          <Button key="back" onClick={() => setIsRescheduleModalOpen(false)} disabled={rescheduleSubmitting}>
+            Keep Current Booking
+          </Button>,
+          <Button 
+            key="submit" 
+            type="primary" 
+            danger={isLateReschedule}
+            className={isLateReschedule ? "" : "bg-emerald-600 hover:bg-emerald-500 border-0"} 
+            loading={rescheduleSubmitting} 
+            onClick={handleConfirmReschedule}
+          >
+            {isLateReschedule ? "Cancel & Make New Booking" : "Submit & Select New Slot"}
+          </Button>
+        ]}
+      >
+        <div className="space-y-4 py-2">
+          {isLateReschedule ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="Advance Reschedule Policy"
+              description="You can only reschedule appointments at least before the appointment day in advance. Same-day or past appointments cannot be rescheduled directly; your current booking will be cancelled and you will need to make a new booking."
+            />
+          ) : (
+            <Alert
+              type="info"
+              showIcon
+              message="Reschedule Notice"
+              description={`To reschedule your appointment on ${reschedulingAppt?.date} at ${reschedulingAppt?.time}, your current booking will be cancelled and you can select a new date and time from the schedule.`}
+            />
+          )}
+
+          <div>
+            <Text className="font-semibold block mb-2 text-slate-700 dark:text-slate-200">
+              Please select a reason (tick only one):
+            </Text>
+            <Radio.Group 
+              onChange={(e) => setRescheduleReason(e.target.value)} 
+              value={rescheduleReason}
+              className="flex flex-col gap-2.5 w-full"
+            >
+              <Radio value="Schedule conflict / Personal commitment" className="text-sm">
+                Schedule conflict / Personal commitment
+              </Radio>
+              <Radio value="Feeling unwell / Medical reasons" className="text-sm">
+                Feeling unwell / Medical reasons
+              </Radio>
+              <Radio value="Unexpected work or travel conflict" className="text-sm">
+                Unexpected work or travel conflict
+              </Radio>
+              <Radio value="Need an earlier or later time slot" className="text-sm">
+                Need an earlier or later time slot
+              </Radio>
+              <Radio value="Other personal reason" className="text-sm">
+                Other personal reason
+              </Radio>
+            </Radio.Group>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Pop-up Modal for Timeline Slot Details */}
+      <Modal
+        open={!!selectedTimelineSlotModal}
+        onCancel={() => setSelectedTimelineSlotModal(null)}
+        footer={[
+          selectedTimelineSlotModal?.type === 'available' ? (
+            <Button 
+              key="select" 
+              type="primary" 
+              className="bg-emerald-600 hover:bg-emerald-500 border-0 rounded-lg"
+              onClick={() => {
+                setSelectedTimeSlot(selectedTimelineSlotModal.time);
+                setSelectedTimelineSlotModal(null);
+              }}
+            >
+              Select This Slot
+            </Button>
+          ) : null,
+          <Button key="close" onClick={() => setSelectedTimelineSlotModal(null)} className="rounded-lg">
+            Close
+          </Button>
+        ].filter(Boolean)}
+        title={
+          <div className="flex items-center gap-2">
+            <InfoCircleOutlined className="text-blue-500" />
+            <span>Schedule Slot Details</span>
+          </div>
+        }
+        destroyOnClose
+        centered
+        width={540}
+      >
+        {selectedTimelineSlotModal && (
+          <div className="space-y-4 py-2">
+            <div className={`p-4 rounded-xl border flex items-center justify-between ${
+              isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
+            }`}>
+              <div>
+                <div className="text-xs text-slate-400 font-medium">Time Slot</div>
+                <div className="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2 mt-0.5">
+                  <ClockCircleOutlined className="text-blue-500" />
+                  {selectedTimelineSlotModal.time} - {selectedTimelineSlotModal.endTime}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs text-slate-400 font-medium">Date</div>
+                <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mt-0.5">
+                  {selectedDate?.format('YYYY-MM-DD')}
+                </div>
+              </div>
+            </div>
+
+            {selectedTimelineSlotModal.type === 'my_booking' && selectedTimelineSlotModal.data && (
+              <div className="p-4 rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/30 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-sm text-blue-900 dark:text-blue-200">Your Appointment</span>
+                  <Tag color="blue" className="font-bold text-xs uppercase px-2.5 py-0.5 rounded-full border-0 m-0">
+                    {selectedTimelineSlotModal.data.status}
+                  </Tag>
+                </div>
+                <AppointmentNotesDisplay 
+                  notes={selectedTimelineSlotModal.data.notes} 
+                  status={selectedTimelineSlotModal.data.status} 
+                  reason={selectedTimelineSlotModal.data.reason} 
+                  consultationType={selectedTimelineSlotModal.data.consultation_type}
+                  doctorNotes={selectedDoctor?.consultation_hours}
+                  clinicName={selectedDoctor?.clinic_name}
+                  isDarkMode={isDarkMode} 
+                />
+              </div>
+            )}
+
+            {selectedTimelineSlotModal.type === 'override' && (
+              <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 space-y-1 text-center">
+                <StopOutlined className="text-2xl text-rose-500" />
+                <div className="text-sm font-bold text-rose-800 dark:text-rose-200">
+                  Doctor Block: {selectedTimelineSlotModal.title}
+                </div>
+                <div className="text-xs text-rose-600 dark:text-rose-400">
+                  Doctor is outstation or on leave during this period.
+                </div>
+              </div>
+            )}
+
+            {selectedTimelineSlotModal.type === 'available' && (
+              <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 space-y-1 text-center">
+                <CheckCircleOutlined className="text-2xl text-emerald-500" />
+                <div className="text-sm font-bold text-emerald-800 dark:text-emerald-200">Slot Available</div>
+                <div className="text-xs text-emerald-600 dark:text-emerald-400">
+                  This 1-hour consultation slot is open. You can click "Select This Slot" to proceed with booking.
+                </div>
+              </div>
+            )}
+
+            {selectedTimelineSlotModal.type === 'booked' && (
+              <div className="p-4 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-center text-xs text-slate-500">
+                This slot is reserved by another patient.
+              </div>
+            )}
+
+            {selectedTimelineSlotModal.type === 'past' && (
+              <div className="p-4 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-center text-xs text-slate-500">
+                This time slot has already passed.
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Pop-up Modal for Full Appointment Details */}
+      <Modal
+        open={!!selectedApptDetailsModal}
+        onCancel={() => setSelectedApptDetailsModal(null)}
+        footer={[
+          selectedApptDetailsModal && (selectedApptDetailsModal.status?.toLowerCase() === 'pending' || selectedApptDetailsModal.status?.toLowerCase() === 'confirmed') ? (
+            <Button 
+              key="resched" 
+              type="primary" 
+              className="bg-emerald-600 hover:bg-emerald-500 border-0 rounded-lg"
+              onClick={() => {
+                const appt = selectedApptDetailsModal;
+                setSelectedApptDetailsModal(null);
+                handleOpenReschedule(appt);
+              }}
+            >
+              Reschedule Appointment
+            </Button>
+          ) : null,
+          <Button key="close" onClick={() => setSelectedApptDetailsModal(null)} className="rounded-lg">
+            Close
+          </Button>
+        ].filter(Boolean)}
+        title={
+          <div className="flex items-center gap-2">
+            <InfoCircleOutlined className="text-blue-500" />
+            <span>Appointment Details</span>
+          </div>
+        }
+        destroyOnClose
+        centered
+        width={580}
+      >
+        {selectedApptDetailsModal && (
+          <div className="space-y-4 py-2">
+            {/* Header info */}
+            <div className={`p-4 rounded-xl border flex items-center justify-between ${
+              isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
+            }`}>
+              <div>
+                <div className="text-xs text-slate-400 font-medium">Doctor</div>
+                <div className="text-base font-bold text-slate-800 dark:text-white mt-0.5">
+                  {selectedDoctor?.name || selectedApptDetailsModal.doctor_name || 'Doctor'}
+                </div>
+                <div className="text-xs text-blue-600 dark:text-blue-400 font-medium">
+                  {selectedDoctor?.specialization || selectedApptDetailsModal.specialization || 'Consultant'}
+                </div>
+              </div>
+              <div className="text-right">
+                <Tag 
+                  color={
+                    selectedApptDetailsModal.status === 'confirmed' ? 'green' : 
+                    selectedApptDetailsModal.status === 'cancelled' ? 'red' : 'gold'
+                  } 
+                  className="font-bold text-xs uppercase px-3 py-1 rounded-full border-0 m-0"
+                >
+                  {selectedApptDetailsModal.status}
+                </Tag>
+              </div>
+            </div>
+
+            {/* Date and Time */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl">
+                <div className="text-xs text-slate-400 font-medium flex items-center gap-1.5">
+                  <CalendarOutlined className="text-blue-500" /> Appointment Date
+                </div>
+                <div className="text-sm font-bold text-slate-800 dark:text-white mt-1">
+                  {selectedApptDetailsModal.date}
+                </div>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl">
+                <div className="text-xs text-slate-400 font-medium flex items-center gap-1.5">
+                  <ClockCircleOutlined className="text-cyan-500" /> Scheduled Time
+                </div>
+                <div className="text-sm font-bold text-slate-800 dark:text-white mt-1">
+                  {selectedApptDetailsModal.time}
+                </div>
+              </div>
+            </div>
+
+            {/* Full Formatted Notes, Reschedule info, Cancelled by who, and Zoom Link */}
+            <AppointmentNotesDisplay 
+              notes={selectedApptDetailsModal.notes} 
+              status={selectedApptDetailsModal.status} 
+              reason={selectedApptDetailsModal.reason} 
+              consultationType={selectedApptDetailsModal.consultation_type}
+              doctorNotes={selectedApptDetailsModal.consultation_hours || selectedDoctor?.consultation_hours}
+              clinicName={selectedApptDetailsModal.clinic_name || selectedDoctor?.clinic_name}
+              isDarkMode={isDarkMode} 
+              compact={false}
+            />
+          </div>
+        )}
+      </Modal>
+
+      {/* Pop-up Modal for Patient Consultation Note Details */}
+      <Modal
+        open={!!selectedPatientNoteModal}
+        onCancel={() => setSelectedPatientNoteModal(null)}
+        footer={[
+          <Button
+            key="close"
+            type="primary"
+            className="bg-blue-600 rounded-lg"
+            onClick={() => setSelectedPatientNoteModal(null)}
+          >
+            Close
+          </Button>
+        ]}
+        title={
+          <div className="flex items-center gap-2 text-base font-bold">
+            <FileTextOutlined className="text-blue-500" />
+            <span>Consultation Note Details</span>
+          </div>
+        }
+        centered
+        width={560}
+      >
+        {selectedPatientNoteModal && (
+          <div className="space-y-4 py-2 text-xs">
+            <div className={`p-4 rounded-xl border flex items-center justify-between ${
+              isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
+            }`}>
+              <div>
+                <div className="text-xs text-slate-400 font-medium">Attending Doctor</div>
+                <div className="text-sm font-bold text-slate-800 dark:text-white mt-0.5">
+                  Dr. {selectedPatientNoteModal.doctor_name || selectedDoctor?.name}
+                </div>
+                <div className="text-xs text-blue-600 dark:text-blue-400">
+                  {selectedPatientNoteModal.clinic_name || selectedDoctor?.clinic_name || 'Clinic Consultation'}
+                </div>
+              </div>
+
+              <div className="text-right">
+                <Tag color="blue" className="rounded-md font-semibold px-2 py-0.5 m-0 mb-1 block">
+                  <CalendarOutlined className="mr-1" /> {selectedPatientNoteModal.date}
+                </Tag>
+                <Tag color="cyan" className="rounded-md font-semibold px-2 py-0.5 m-0 block">
+                  <ClockCircleOutlined className="mr-1" /> {selectedPatientNoteModal.time}
+                </Tag>
+              </div>
+            </div>
+
+            {/* Diagnosis */}
+            <div className={`p-4 rounded-xl border ${
+              isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+            }`}>
+              <div className="font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <CheckCircleOutlined className="text-blue-500" /> Diagnosis & Findings
+              </div>
+              <div className="whitespace-pre-wrap leading-relaxed text-slate-800 dark:text-slate-200 text-xs">
+                {selectedPatientNoteModal.diagnosis || <span className="text-slate-400 italic">No diagnosis recorded</span>}
+              </div>
+            </div>
+
+            {/* Treatment */}
+            <div className={`p-4 rounded-xl border ${
+              isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+            }`}>
+              <div className="font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <FileTextOutlined className="text-emerald-500" /> Treatment Recommendations & Advice
+              </div>
+              <div className="whitespace-pre-wrap leading-relaxed text-slate-800 dark:text-slate-200 text-xs">
+                {selectedPatientNoteModal.treatment || <span className="text-slate-400 italic">No treatment instructions recorded</span>}
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
     </Row>
   );
 };
+

@@ -25,7 +25,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ handleLogin, setAuthView }
           { type: 'email', message: 'Please enter a valid email' }
         ]}
       >
-        <Input prefix={<MailOutlined className="text-slate-400" />} placeholder="john@example.com" />
+        <Input prefix={<MailOutlined className="text-slate-400" />} placeholder="john@example.com" allowClear />
       </Form.Item>
 
       <Form.Item
@@ -34,7 +34,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ handleLogin, setAuthView }
         rules={[{ required: true, message: 'Please enter your password' }]}
         className="mb-2"
       >
-        <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" />
+        <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" allowClear />
       </Form.Item>
 
       <div className="flex justify-end mb-4 mt-1">

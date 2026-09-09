@@ -194,9 +194,17 @@ def init_db():
                 time TEXT NOT NULL,
                 status TEXT DEFAULT 'pending',
                 notes TEXT,
+                consultation_type TEXT DEFAULT 'online',
                 timestamp REAL
             )
         """)
+
+        # Database Migration: Add consultation_type column if not present
+        try:
+            cursor.execute("ALTER TABLE appointments ADD COLUMN consultation_type TEXT DEFAULT 'online'")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
         # Create doctor timetable tables
         cursor.execute("""
@@ -239,6 +247,21 @@ def init_db():
                 answer TEXT NOT NULL,
                 category TEXT NOT NULL,
                 timestamp REAL
+            )
+        """)
+
+        # Create consultation_notes table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS consultation_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                doctor_id INTEGER NOT NULL,
+                patient_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                time TEXT NOT NULL,
+                diagnosis TEXT,
+                treatment TEXT,
+                timestamp REAL,
+                created_at TEXT
             )
         """)
 
@@ -990,7 +1013,7 @@ def get_user_profile_picture(user_id: int) -> Optional[bytes]:
         if conn:
             conn.close()
 
-def create_appointment(doctor_id: int, patient_id: int, date: str, time_str: str, notes: str) -> Optional[Dict[str, Any]]:
+def create_appointment(doctor_id: int, patient_id: int, date: str, time_str: str, notes: str, consultation_type: str = 'online') -> Optional[Dict[str, Any]]:
     conn = None
     try:
         conn = sqlite3.connect(DB_FILE, timeout=30.0)
@@ -999,9 +1022,9 @@ def create_appointment(doctor_id: int, patient_id: int, date: str, time_str: str
         
         now = time.time()
         cursor.execute("""
-            INSERT INTO appointments (doctor_id, patient_id, date, time, status, notes, timestamp)
-            VALUES (?, ?, ?, ?, 'pending', ?, ?)
-        """, (doctor_id, patient_id, date, time_str, notes, now))
+            INSERT INTO appointments (doctor_id, patient_id, date, time, status, notes, consultation_type, timestamp)
+            VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
+        """, (doctor_id, patient_id, date, time_str, notes, consultation_type or 'online', now))
         
         conn.commit()
         appointment_id = cursor.lastrowid
@@ -1047,7 +1070,7 @@ def get_appointments_for_patient(patient_id: int) -> List[Dict[str, Any]]:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT a.*, u.name as doctor_name, u.email as doctor_email 
+            SELECT a.*, u.name as doctor_name, u.email as doctor_email, u.clinic_name, u.consultation_hours, u.specialization
             FROM appointments a
             JOIN users u ON a.doctor_id = u.id
             WHERE a.patient_id = ?
@@ -1205,6 +1228,51 @@ def get_notifications(user_id: int) -> List[Dict[str, Any]]:
     except Exception as e:
         print(f"Error getting notifications: {e}")
         return []
+    finally:
+        if conn:
+            conn.close()
+
+def mark_notification_read(notification_id: int, user_id: int) -> bool:
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?", (notification_id, user_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error marking notification read: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def mark_all_notifications_read(user_id: int) -> bool:
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE notifications SET is_read = 1 WHERE user_id = ?", (user_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error marking all notifications read: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def delete_all_notifications(user_id: int) -> bool:
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM notifications WHERE user_id = ?", (user_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error deleting notifications: {e}")
+        return False
     finally:
         if conn:
             conn.close()
@@ -1384,3 +1452,144 @@ def get_audit_logs() -> List[Dict[str, Any]]:
     finally:
         if conn:
             conn.close()
+
+def save_consultation_note(
+    doctor_id: int, 
+    patient_id: int, 
+    diagnosis: str, 
+    treatment: str, 
+    date_str: Optional[str] = None, 
+    time_str: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    conn = None
+    import time
+    from datetime import datetime
+    try:
+        now = datetime.now()
+        current_date = date_str or now.strftime("%Y-%m-%d")
+        current_time = time_str or now.strftime("%H:%M")
+        ts = time.time()
+        created_at = now.strftime("%Y-%m-%d %H:%M:%S")
+        
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO consultation_notes (doctor_id, patient_id, date, time, diagnosis, treatment, timestamp, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (doctor_id, patient_id, current_date, current_time, diagnosis, treatment, ts, created_at))
+        note_id = cursor.lastrowid
+        conn.commit()
+        
+        return {
+            "id": note_id,
+            "doctor_id": doctor_id,
+            "patient_id": patient_id,
+            "date": current_date,
+            "time": current_time,
+            "diagnosis": diagnosis,
+            "treatment": treatment,
+            "timestamp": ts,
+            "created_at": created_at
+        }
+    except Exception as e:
+        print(f"Error saving consultation note: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+def get_consultation_notes(doctor_id: int, patient_id: int) -> List[Dict[str, Any]]:
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, doctor_id, patient_id, date, time, diagnosis, treatment, timestamp, created_at
+            FROM consultation_notes
+            WHERE doctor_id = ? AND patient_id = ?
+            ORDER BY date DESC, time DESC, id DESC
+        """, (doctor_id, patient_id))
+        return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        print(f"Error getting consultation notes: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+def get_all_consultation_notes_for_doctor(doctor_id: int) -> List[Dict[str, Any]]:
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT cn.id, cn.doctor_id, cn.patient_id, cn.date, cn.time, cn.diagnosis, cn.treatment, cn.timestamp, cn.created_at,
+                   u.name as patient_name, u.email as patient_email, u.gender as patient_gender
+            FROM consultation_notes cn
+            LEFT JOIN users u ON cn.patient_id = u.id
+            WHERE cn.doctor_id = ?
+            ORDER BY cn.date DESC, cn.time DESC, cn.id DESC
+        """, (doctor_id,))
+        return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        print(f"Error getting all consultation notes: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+def delete_consultation_note(note_id: int, doctor_id: int) -> bool:
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute("""
+            DELETE FROM consultation_notes
+            WHERE id = ? AND doctor_id = ?
+        """, (note_id, doctor_id))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"Error deleting consultation note: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def get_consultation_notes_for_patient(patient_id: int, doctor_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        if doctor_id:
+            cursor.execute("""
+                SELECT cn.id, cn.doctor_id, cn.patient_id, cn.date, cn.time, cn.diagnosis, cn.treatment, cn.timestamp, cn.created_at,
+                       u.name as doctor_name, u.email as doctor_email, u.clinic_name, u.specialization
+                FROM consultation_notes cn
+                JOIN users u ON cn.doctor_id = u.id
+                WHERE cn.patient_id = ? AND cn.doctor_id = ?
+                ORDER BY cn.date DESC, cn.time DESC, cn.id DESC
+            """, (patient_id, doctor_id))
+        else:
+            cursor.execute("""
+                SELECT cn.id, cn.doctor_id, cn.patient_id, cn.date, cn.time, cn.diagnosis, cn.treatment, cn.timestamp, cn.created_at,
+                       u.name as doctor_name, u.email as doctor_email, u.clinic_name, u.specialization
+                FROM consultation_notes cn
+                JOIN users u ON cn.doctor_id = u.id
+                WHERE cn.patient_id = ?
+                ORDER BY cn.date DESC, cn.time DESC, cn.id DESC
+            """, (patient_id,))
+        return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        print(f"Error getting patient consultation notes: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+
+

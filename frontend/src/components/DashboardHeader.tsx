@@ -19,7 +19,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   
   // Use notifications context safely, fallback if used outside provider (though we wrapped it)
   const notificationsCtx = useNotifications();
-  const { notifications, markAllAsRead, clearAll, unreadCount } = notificationsCtx || { notifications: [], markAllAsRead: ()=>{}, clearAll: ()=>{}, unreadCount: 0 };
+  const { notifications, markAllAsRead, markOneAsRead, clearAll, unreadCount } = notificationsCtx || { notifications: [], markAllAsRead: async ()=>{}, markOneAsRead: async ()=>{}, clearAll: async ()=>{}, unreadCount: 0 };
 
   const onChangePasswordFinish = async (values: any) => {
     if (handleChangePassword) {
@@ -72,20 +72,40 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
                         <div className="text-center py-8 text-slate-400 text-xs">No notifications</div>
                       ) : (
                         <div className="space-y-2">
-                          {notifications.map(notif => (
-                            <div key={notif.id} className={`p-3 rounded-lg border ${!notif.isRead ? 'bg-blue-50/50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-800' : 'bg-transparent border-slate-100 dark:border-slate-800'}`}>
-                              <div className="flex justify-between items-start mb-1">
-                                <span className={`text-xs font-bold ${notif.type === 'error' ? 'text-rose-500' : notif.type === 'warning' ? 'text-amber-500' : 'text-blue-500'}`}>{notif.title}</span>
-                                <span className="text-[10px] text-slate-400">{new Date(notif.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                              </div>
-                              <p className="text-xs text-slate-600 dark:text-slate-300 m-0 leading-snug">{notif.message}</p>
-                              {notif.score !== undefined && (
-                                <div className="mt-2 text-[10px] font-semibold">
-                                  Score: <span className={notif.score < 70 ? 'text-rose-500' : 'text-emerald-500'}>{notif.score.toFixed(1)}/100</span>
+                          {notifications.map(notif => {
+                            const notifDate = new Date(notif.timestamp);
+                            const isToday = new Date().toDateString() === notifDate.toDateString();
+                            const timeFormatted = isToday 
+                              ? `Today ${notifDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`
+                              : notifDate.toLocaleDateString([], {month: 'short', day: 'numeric', hour: '2-digit', minute:'2-digit'});
+
+                            return (
+                              <div 
+                                key={notif.id} 
+                                onClick={() => markOneAsRead && markOneAsRead(notif.id)}
+                                className={`p-3 rounded-xl border transition-all cursor-pointer ${
+                                  !notif.isRead 
+                                    ? 'bg-blue-50/70 dark:bg-blue-900/25 border-blue-200 dark:border-blue-800 shadow-xs' 
+                                    : 'bg-transparent border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                                }`}
+                              >
+                                <div className="flex justify-between items-start mb-1 gap-2">
+                                  <span className={`text-xs font-bold ${
+                                    notif.type === 'error' ? 'text-rose-500' : notif.type === 'warning' ? 'text-amber-500' : 'text-blue-600 dark:text-blue-400'
+                                  }`}>
+                                    {notif.title}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 flex-shrink-0">{timeFormatted}</span>
                                 </div>
-                              )}
-                            </div>
-                          ))}
+                                <p className="text-xs text-slate-600 dark:text-slate-300 m-0 leading-snug break-words">{notif.message}</p>
+                                {notif.score !== undefined && (
+                                  <div className="mt-2 text-[10px] font-semibold">
+                                    Score: <span className={notif.score < 70 ? 'text-rose-500' : 'text-emerald-500'}>{notif.score.toFixed(1)}/100</span>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>

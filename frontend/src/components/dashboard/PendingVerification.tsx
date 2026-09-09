@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Button, Typography, Result } from 'antd';
-import { ClockCircleOutlined, LogoutOutlined } from '@ant-design/icons';
+import { ClockCircleOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import { User } from '../../types';
 
 const { Title, Paragraph } = Typography;
@@ -43,15 +43,14 @@ export const PendingVerification: React.FC<PendingVerificationProps> = ({
           }
           extra={[
             <Button 
-              key="logout" 
+              key="back-to-login" 
               type="primary" 
-              danger 
-              icon={<LogoutOutlined />} 
+              icon={<ArrowLeftOutlined />} 
               onClick={handleLogout}
               size="large"
-              className="px-8"
+              className="bg-emerald-600 hover:bg-emerald-500 border-0 px-8 font-semibold shadow-md"
             >
-              Log Out
+              Back to Login
             </Button>
           ]}
         />

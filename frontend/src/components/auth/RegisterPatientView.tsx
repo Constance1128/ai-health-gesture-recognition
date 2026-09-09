@@ -66,7 +66,7 @@ export const RegisterPatientView: React.FC<RegisterPatientViewProps> = ({ handle
           { type: 'email', message: 'Please enter a valid email' }
         ]}
       >
-        <Input prefix={<MailOutlined className="text-slate-400" />} placeholder="john@example.com" />
+        <Input prefix={<MailOutlined className="text-slate-400" />} placeholder="john@example.com" allowClear />
       </Form.Item>
 
       <Form.Item
@@ -77,7 +77,7 @@ export const RegisterPatientView: React.FC<RegisterPatientViewProps> = ({ handle
           { min: 6, message: 'Password must be at least 6 characters' }
         ]}
       >
-        <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" />
+        <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" allowClear />
       </Form.Item>
 
       <Form.Item
@@ -96,7 +96,7 @@ export const RegisterPatientView: React.FC<RegisterPatientViewProps> = ({ handle
           }),
         ]}
       >
-        <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" />
+        <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" allowClear />
       </Form.Item>
 
       <Form.Item className="mb-2">

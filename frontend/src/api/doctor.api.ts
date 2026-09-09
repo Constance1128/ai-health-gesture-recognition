@@ -29,3 +29,17 @@ export const getDoctorSchedule = (email: string) =>
 
 export const updateDoctorSchedule = (data: any) => 
   fetchApi<any>('/api/doctor/schedule', { method: 'PUT', body: JSON.stringify(data) });
+
+export const getConsultationNotes = (email: string, patientId?: number) => {
+  const url = patientId 
+    ? `/api/doctor/consultation-notes?email=${encodeURIComponent(email)}&patient_id=${patientId}`
+    : `/api/doctor/consultation-notes?email=${encodeURIComponent(email)}`;
+  return fetchApi<any[]>(url);
+};
+
+export const saveConsultationNote = (data: { email: string; patient_id: number; diagnosis: string; treatment: string; date?: string; time?: string }) =>
+  fetchApi<any>('/api/doctor/consultation-notes', { method: 'POST', body: JSON.stringify(data) });
+
+export const deleteConsultationNote = (noteId: number, email: string) =>
+  fetchApi<any>(`/api/doctor/consultation-notes/${noteId}?email=${encodeURIComponent(email)}`, { method: 'DELETE' });
+

@@ -1,16 +1,28 @@
-import React from 'react';
-import { Typography, Tag, Empty } from 'antd';
-import { ClockCircleOutlined, CalendarOutlined, CheckCircleOutlined, WarningOutlined } from '@ant-design/icons';
+import React, { useState } from 'react';
+import { Typography, Tag, Modal, Button, Divider, Badge } from 'antd';
+import { 
+  ClockCircleOutlined, 
+  CalendarOutlined, 
+  CheckCircleOutlined, 
+  WarningOutlined, 
+  UserOutlined, 
+  MailOutlined,
+  StopOutlined,
+  InfoCircleOutlined,
+  EyeOutlined,
+  CloseCircleOutlined
+} from '@ant-design/icons';
 import dayjs from 'dayjs';
 import isBetween from 'dayjs/plugin/isBetween';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
+import { AppointmentNotesDisplay, parseAppointmentNotes } from '../../utils/appointmentFormatter';
 
 dayjs.extend(isBetween);
 dayjs.extend(isSameOrBefore);
 dayjs.extend(isSameOrAfter);
 
-const { Text } = Typography;
+const { Text, Title } = Typography;
 
 const SHINE_STYLE = `
 @keyframes nowPing {
@@ -48,6 +60,8 @@ interface DailyTimelineProps {
 }
 
 export const DailyTimeline: React.FC<DailyTimelineProps> = ({ date, appointments, weeklySchedule, overrides, isDarkMode }) => {
+  const [selectedSlotModal, setSelectedSlotModal] = useState<any | null>(null);
+
   const hours = Array.from({ length: 24 }, (_, i) => i); // 00:00 to 23:00
 
   const dayOfWeek = date.day(); // 0 = Sunday, 1 = Monday
@@ -58,30 +72,39 @@ export const DailyTimeline: React.FC<DailyTimelineProps> = ({ date, appointments
     return true;
   });
 
+  const dateStr = date.format('YYYY-MM-DD');
+  const dayOverrides = overrides.filter(o => o.date === dateStr);
+
   // Compute Now and Next
   const now = dayjs();
   let allEvents: any[] = [];
   
   appointments.forEach(appt => {
-    if (appt.appointment_date === date.format('YYYY-MM-DD') && appt.status !== 'CANCELLED') {
+    const apptDate = appt.date || appt.appointment_date;
+    const apptTime = appt.time || appt.start_time;
+    const apptEndTime = appt.end_time || (apptTime ? dayjs(`${apptDate} ${apptTime}`).add(1, 'hour').format('HH:mm') : '');
+    const apptStatus = (appt.status || '').toLowerCase();
+
+    if (apptDate === dateStr && apptStatus !== 'cancelled') {
       allEvents.push({
         type: 'appointment',
-        title: `Appt: ${appt.patient_name || appt.patient_email}`,
-        start: dayjs(`${appt.appointment_date} ${appt.start_time}`),
-        end: dayjs(`${appt.appointment_date} ${appt.end_time}`)
+        title: `Appt: ${appt.patient_name || appt.patient_email} (${apptStatus.toUpperCase()})`,
+        start: dayjs(`${apptDate} ${apptTime}`),
+        end: dayjs(`${apptDate} ${apptEndTime}`),
+        status: apptStatus,
+        data: appt
       });
     }
   });
   
-  overrides.forEach(ovr => {
-    if (ovr.date === date.format('YYYY-MM-DD')) {
-      allEvents.push({
-        type: 'override',
-        title: ovr.reason || 'Blocked',
-        start: dayjs(`${ovr.date} ${ovr.start_time}`),
-        end: dayjs(`${ovr.date} ${ovr.end_time}`)
-      });
-    }
+  dayOverrides.forEach(ovr => {
+    allEvents.push({
+      type: 'override',
+      title: ovr.reason || 'Doctor Blocked / Outstation',
+      start: dayjs(`${ovr.date} ${ovr.start_time}`),
+      end: dayjs(`${ovr.date} ${ovr.end_time}`),
+      data: ovr
+    });
   });
   
   allEvents.sort((a, b) => a.start.valueOf() - b.start.valueOf());
@@ -102,8 +125,8 @@ export const DailyTimeline: React.FC<DailyTimelineProps> = ({ date, appointments
   const getSlotStatus = (hour: number) => {
     const slotStartStr = `${hour.toString().padStart(2, '0')}:00`;
     const slotEndStr = `${(hour + 1).toString().padStart(2, '0')}:00`;
-    const slotStart = dayjs(`${date.format('YYYY-MM-DD')} ${slotStartStr}`);
-    const slotEnd = dayjs(`${date.format('YYYY-MM-DD')} ${slotEndStr}`);
+    const slotStart = dayjs(`${dateStr} ${slotStartStr}`);
+    const slotEnd = dayjs(`${dateStr} ${slotEndStr}`);
     const now = dayjs();
 
     let isPast = false;
@@ -111,22 +134,26 @@ export const DailyTimeline: React.FC<DailyTimelineProps> = ({ date, appointments
       isPast = true;
     }
 
-    // 1. Check Overrides (Blocked)
-    for (const ovr of overrides) {
-      if (ovr.date === date.format('YYYY-MM-DD')) {
-        const ovrStart = dayjs(`${ovr.date} ${ovr.start_time}`);
-        const ovrEnd = dayjs(`${ovr.date} ${ovr.end_time}`);
-        if (slotStart.isBefore(ovrEnd) && slotEnd.isAfter(ovrStart)) {
-          return { type: 'blocked', reason: ovr.reason || 'Blocked', isPast };
-        }
+    // 1. Check Overrides matching this hour slot
+    const slotOverrides: any[] = [];
+    for (const ovr of dayOverrides) {
+      const ovrStart = dayjs(`${ovr.date} ${ovr.start_time}`);
+      const ovrEnd = dayjs(`${ovr.date} ${ovr.end_time}`);
+      if (slotStart.isBefore(ovrEnd) && slotEnd.isAfter(ovrStart)) {
+        slotOverrides.push(ovr);
       }
     }
 
-    // 2. Check Appointments
+    // 2. Check Appointments matching this hour slot
     const slotAppts = appointments.filter(appt => {
-      if (appt.appointment_date === date.format('YYYY-MM-DD') && appt.status !== 'CANCELLED') {
-        const apptStart = dayjs(`${appt.appointment_date} ${appt.start_time}`);
-        const apptEnd = dayjs(`${appt.appointment_date} ${appt.end_time}`);
+      const apptDate = appt.date || appt.appointment_date;
+      const apptTime = appt.time || appt.start_time;
+      const apptEndTime = appt.end_time || (apptTime ? dayjs(`${apptDate} ${apptTime}`).add(1, 'hour').format('HH:mm') : '');
+      const apptStatus = (appt.status || '').toLowerCase();
+
+      if (apptDate === dateStr && apptStatus !== 'cancelled') {
+        const apptStart = dayjs(`${apptDate} ${apptTime}`);
+        const apptEnd = dayjs(`${apptDate} ${apptEndTime}`);
         if (slotStart.isBefore(apptEnd) && slotEnd.isAfter(apptStart)) {
           return true;
         }
@@ -134,37 +161,92 @@ export const DailyTimeline: React.FC<DailyTimelineProps> = ({ date, appointments
       return false;
     });
 
+    // Case A: Appointments exist (with or without override)
     if (slotAppts.length > 0) {
-      return { type: 'appointment', appts: slotAppts, isPast };
+      return { 
+        type: 'appointment', 
+        appts: slotAppts, 
+        overrides: slotOverrides,
+        isPast, 
+        slotStartStr, 
+        slotEndStr 
+      };
     }
 
-    // 3. Check Working Hours
+    // Case B: No appointments, but doctor has set an override/block
+    if (slotOverrides.length > 0) {
+      return { 
+        type: 'blocked', 
+        reason: slotOverrides.map(o => o.reason || 'Doctor Outstation / Blocked').join(', '), 
+        overrides: slotOverrides,
+        isPast,
+        slotStartStr,
+        slotEndStr
+      };
+    }
+
+    // Case C: Working Hours Check
     if (!daySchedule) {
-      return { type: 'unavailable', reason: 'Not Working', isPast };
+      return { type: 'unavailable', reason: 'Not In Practice Schedule', isPast, slotStartStr, slotEndStr };
     }
 
-    const workStart = dayjs(`${date.format('YYYY-MM-DD')} ${daySchedule.start_time}`);
-    const workEnd = dayjs(`${date.format('YYYY-MM-DD')} ${daySchedule.end_time}`);
+    const workStart = dayjs(`${dateStr} ${daySchedule.start_time}`);
+    const workEnd = dayjs(`${dateStr} ${daySchedule.end_time}`);
     
     // If the slot is outside working hours
-    if (slotStart.isSameOrBefore(workStart) && slotEnd.isSameOrBefore(workStart)) return { type: 'unavailable', reason: 'Outside Hours', isPast };
-    if (slotStart.isSameOrAfter(workEnd)) return { type: 'unavailable', reason: 'Outside Hours', isPast };
+    if (slotStart.isSameOrBefore(workStart) && slotEnd.isSameOrBefore(workStart)) {
+      return { type: 'unavailable', reason: 'Outside Working Hours', isPast, slotStartStr, slotEndStr };
+    }
+    if (slotStart.isSameOrAfter(workEnd)) {
+      return { type: 'unavailable', reason: 'Outside Working Hours', isPast, slotStartStr, slotEndStr };
+    }
 
-    return { type: 'available', isPast };
+    return { type: 'available', isPast, slotStartStr, slotEndStr };
   };
 
   return (
     <div className="w-full">
       <style>{SHINE_STYLE}</style>
+      
       {/* Date header */}
-      <div className={`px-4 py-3 rounded-xl border-l-4 mb-5 ${isDarkMode ? 'bg-blue-900/20 border-blue-600' : 'bg-blue-50 border-blue-500'}`}>
+      <div className={`px-4 py-3 rounded-xl border-l-4 mb-3 flex items-center justify-between flex-wrap gap-2 ${isDarkMode ? 'bg-blue-900/20 border-blue-600' : 'bg-blue-50 border-blue-500'}`}>
         <div className="flex items-center gap-2">
           <CalendarOutlined className={isDarkMode ? 'text-blue-400' : 'text-blue-600'} />
           <Text className={`font-bold ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
             {date.format('dddd, MMMM D, YYYY')}
           </Text>
         </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500">
+            {allEvents.filter(e => e.type === 'appointment').length} booking(s)
+          </span>
+          {dayOverrides.length > 0 && (
+            <Tag color="error" className="m-0 border-0 font-semibold text-xs">
+              {dayOverrides.map(o => o.reason || 'Outstation').join(' • ')}
+            </Tag>
+          )}
+        </div>
       </div>
+
+      {/* Outstation / Schedule Alert if day is blocked */}
+      {dayOverrides.length > 0 && (
+        <div className={`p-3 rounded-xl border mb-4 flex items-start gap-3 ${
+          isDarkMode ? 'bg-rose-950/20 border-rose-900/40 text-rose-300' : 'bg-rose-50/70 border-rose-200 text-rose-800'
+        }`}>
+          <StopOutlined className="mt-0.5 text-rose-500 flex-shrink-0" />
+          <div className="text-xs leading-relaxed">
+            <span className="font-bold">Doctor Notice for {date.format('MMMM D')}: </span>
+            {dayOverrides.map((ovr, i) => (
+              <span key={i} className="inline-block mr-2">
+                <strong>[{ovr.reason || 'Outstation'}]</strong> {ovr.start_time} - {ovr.end_time}
+              </span>
+            ))}
+            <span className="block mt-0.5 text-slate-500 dark:text-slate-400">
+              * Any active appointments on this day are shown below. Click any card for full details.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Now / Next banner (today only) */}
       {date.isSame(dayjs(), 'day') && (
@@ -197,13 +279,13 @@ export const DailyTimeline: React.FC<DailyTimelineProps> = ({ date, appointments
         </div>
       )}
 
-      {/* Grab/Foodpanda-style vertical step tracker */}
+      {/* Vertical Step Tracker */}
       <div className="relative">
         {/* Vertical line */}
         <div className={`absolute left-5 top-0 bottom-0 w-0.5 ${isDarkMode ? 'bg-slate-700' : 'bg-slate-200'}`} style={{ marginLeft: -1 }} />
 
         <div className="space-y-1">
-          {hours.map((hour, idx) => {
+          {hours.map((hour) => {
             const status = getSlotStatus(hour);
             const timeLabel = `${hour.toString().padStart(2, '0')}:00`;
             const isNow = date.isSame(dayjs(), 'day') && dayjs().hour() === hour;
@@ -234,7 +316,12 @@ export const DailyTimeline: React.FC<DailyTimelineProps> = ({ date, appointments
               cardBorder = isDarkMode ? '#7f1d1d' : '#fecdd3';
               labelColor = '#ef4444';
               statusText = (
-                <span style={{ fontSize: 13, fontWeight: 600, color: '#ef4444' }}>{status.reason}</span>
+                <div className="flex items-center justify-between">
+                  <span style={{ fontSize: 13, fontWeight: 600, color: '#ef4444' }}>
+                    ⛔ {status.reason}
+                  </span>
+                  <span className="text-[10px] text-slate-400">Click for details</span>
+                </div>
               );
             } else if (status.type === 'appointment') {
               dotColor = '#2563eb';
@@ -242,31 +329,82 @@ export const DailyTimeline: React.FC<DailyTimelineProps> = ({ date, appointments
               cardBg = isDarkMode ? 'rgba(37,99,235,0.12)' : '#eff6ff';
               cardBorder = isDarkMode ? '#1d4ed8' : '#bfdbfe';
               labelColor = '#2563eb';
+              
+              const hasOverride = status.overrides && status.overrides.length > 0;
+
               statusText = (
-                <div>
-                  {status.appts?.map((appt: any, i: number) => (
-                    <div key={i}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: isDarkMode ? '#93c5fd' : '#1d4ed8' }}>
-                        {appt.patient_name || appt.patient_email}
-                      </span>
-                      <span style={{ fontSize: 11, color: '#64748b', marginLeft: 6 }}>
-                        {appt.start_time}–{appt.end_time} • {appt.status}
-                      </span>
+                <div className="space-y-2">
+                  {hasOverride && (
+                    <div className="flex items-center gap-1.5">
+                      <Tag color="red" className="m-0 text-[10px] font-bold uppercase border-0">
+                        Doctor: {status.overrides.map((o: any) => o.reason || 'Outstation').join(', ')}
+                      </Tag>
                     </div>
-                  ))}
+                  )}
+
+                  {status.appts?.map((appt: any, i: number) => {
+                    const timeStr = appt.time || appt.start_time || '';
+                    const isConf = (appt.status || '').toLowerCase() === 'confirmed';
+                    const isCanc = (appt.status || '').toLowerCase() === 'cancelled';
+                    return (
+                      <div key={i} className="p-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
+                        <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+                          <span style={{ fontSize: 13, fontWeight: 700, color: isDarkMode ? '#93c5fd' : '#1d4ed8' }}>
+                            {appt.patient_name || appt.patient_email}
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span style={{ fontSize: 11, color: '#64748b' }}>
+                              {timeStr}
+                            </span>
+                            <Tag 
+                              color={isConf ? 'green' : isCanc ? 'red' : 'gold'} 
+                              className="m-0 text-[10px] uppercase font-bold px-1.5 py-0 border-0 rounded-full"
+                            >
+                              {appt.status}
+                            </Tag>
+                          </div>
+                        </div>
+
+                        {/* Clean formatted appointment notes display */}
+                        <AppointmentNotesDisplay 
+                          notes={appt.notes} 
+                          status={appt.status} 
+                          reason={appt.reason} 
+                          consultationType={appt.consultation_type}
+                          isDarkMode={isDarkMode} 
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               );
+
             } else if (status.type === 'available') {
               dotColor = '#10b981';
               dotBorder = '#a7f3d0';
               labelColor = '#10b981';
-              statusText = <span style={{ fontSize: 12, color: '#10b981', fontWeight: 500 }}>Available for Booking</span>;
+              statusText = (
+                <div className="flex items-center justify-between">
+                  <span style={{ fontSize: 12, color: '#10b981', fontWeight: 500 }}>Available for Booking</span>
+                  <span className="text-[10px] text-slate-400">Click to view</span>
+                </div>
+              );
             } else {
               statusText = <span style={{ fontSize: 12, color: isDarkMode ? '#475569' : '#94a3b8', fontStyle: 'italic' }}>Outside Working Hours</span>;
             }
 
             return (
-              <div key={hour} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, position: 'relative', paddingBottom: 4, opacity: status.isPast && !isNow ? 0.45 : 1 }}>
+              <div 
+                key={hour} 
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'flex-start', 
+                  gap: 12, 
+                  position: 'relative', 
+                  paddingBottom: 4, 
+                  opacity: status.isPast && !isNow ? 0.6 : 1 
+                }}
+              >
                 {/* Dot with shine effect for NOW */}
                 <div style={{ flexShrink: 0, width: 36, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 10, position: 'relative' }}>
                   {/* Ping ring 1 */}
@@ -289,7 +427,7 @@ export const DailyTimeline: React.FC<DailyTimelineProps> = ({ date, appointments
                       zIndex: 1
                     }} />
                   )}
-                  {/* Core dot — glow matches dot color via CSS vars */}
+                  {/* Core dot */}
                   <div style={{
                     width: isNow ? 16 : 11,
                     height: isNow ? 16 : 11,
@@ -301,24 +439,29 @@ export const DailyTimeline: React.FC<DailyTimelineProps> = ({ date, appointments
                     position: 'relative',
                     transition: 'all 0.2s',
                     marginTop: isNow ? 0 : 2,
-                    // Pass dot color to CSS keyframes via custom properties
                     ['--dot-c' as any]: dotColor,
                     ['--glow-a' as any]: hexToRgba(dotColor, 0.7),
                     ['--glow-b' as any]: hexToRgba(dotColor, 0.45),
                   }} />
                 </div>
 
-                {/* Card */}
-                <div style={{
-                  flex: 1,
-                  background: cardBg,
-                  border: `1px solid ${cardBorder}`,
-                  borderRadius: 12,
-                  padding: '10px 14px',
-                  marginBottom: 4,
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: statusText ? 4 : 0 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: timeColor }}>{timeLabel}</span>
+                {/* Interactive Clickable Card */}
+                <div 
+                  onClick={() => setSelectedSlotModal({ ...status, hour, dateStr })}
+                  className="flex-1 cursor-pointer transition-all duration-150 hover:shadow-md hover:scale-[1.005] active:scale-[0.99]"
+                  style={{
+                    background: cardBg,
+                    border: `1px solid ${cardBorder}`,
+                    borderRadius: 12,
+                    padding: '10px 14px',
+                    marginBottom: 4,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: statusText ? 6 : 0 }}>
+                    <div className="flex items-center gap-2">
+                      <span style={{ fontSize: 12, fontWeight: 700, color: timeColor }}>{timeLabel} - {status.slotEndStr}</span>
+                      {status.isPast && <Tag color="default" className="m-0 text-[10px] border-0">Past</Tag>}
+                    </div>
                     {isNow && (
                       <span style={{
                         fontSize: 9, fontWeight: 800, color: '#fff',
@@ -334,6 +477,131 @@ export const DailyTimeline: React.FC<DailyTimelineProps> = ({ date, appointments
           })}
         </div>
       </div>
+
+      {/* Pop-up Modal for Details */}
+      <Modal
+        open={!!selectedSlotModal}
+        onCancel={() => setSelectedSlotModal(null)}
+        footer={[
+          <Button key="close" type="primary" onClick={() => setSelectedSlotModal(null)} className="rounded-lg">
+            Close
+          </Button>
+        ]}
+        title={
+          <div className="flex items-center gap-2">
+            <InfoCircleOutlined className="text-blue-500" />
+            <span>Time Slot & Booking Details</span>
+          </div>
+        }
+        destroyOnClose
+        centered
+        width={560}
+      >
+        {selectedSlotModal && (
+          <div className="space-y-4 py-2">
+            {/* Time and Date header banner */}
+            <div className={`p-4 rounded-xl border flex items-center justify-between ${
+              isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
+            }`}>
+              <div>
+                <div className="text-xs text-slate-400 font-medium">Scheduled Time</div>
+                <div className="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2 mt-0.5">
+                  <ClockCircleOutlined className="text-blue-500" />
+                  {selectedSlotModal.slotStartStr} - {selectedSlotModal.slotEndStr}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs text-slate-400 font-medium">Date</div>
+                <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mt-0.5">
+                  {selectedSlotModal.dateStr}
+                </div>
+              </div>
+            </div>
+
+            {/* Overrides / Doctor block notice */}
+            {selectedSlotModal.overrides && selectedSlotModal.overrides.length > 0 && (
+              <div className="p-3.5 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 rounded-xl space-y-1">
+                <div className="text-xs font-bold text-rose-700 dark:text-rose-300 flex items-center gap-1.5">
+                  <StopOutlined /> Doctor Block / Outstation
+                </div>
+                {selectedSlotModal.overrides.map((ovr: any, idx: number) => (
+                  <div key={idx} className="text-xs text-rose-600 dark:text-rose-400">
+                    <strong>Reason:</strong> {ovr.reason || 'Doctor unavailable'} ({ovr.start_time} - {ovr.end_time})
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* If appointments exist */}
+            {selectedSlotModal.appts && selectedSlotModal.appts.length > 0 ? (
+              <div className="space-y-3">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                  Appointments ({selectedSlotModal.appts.length})
+                </div>
+                {selectedSlotModal.appts.map((appt: any, idx: number) => {
+                  const isConf = (appt.status || '').toLowerCase() === 'confirmed';
+                  const isCanc = (appt.status || '').toLowerCase() === 'cancelled';
+                  return (
+                    <div key={idx} className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="font-bold text-base text-slate-800 dark:text-white flex items-center gap-2">
+                            <UserOutlined className="text-blue-500" />
+                            {appt.patient_name || appt.patient_email}
+                          </div>
+                          <div className="text-xs text-slate-400 flex items-center gap-1.5 mt-1">
+                            <MailOutlined /> {appt.patient_email}
+                          </div>
+                        </div>
+                        <Tag 
+                          color={isConf ? 'green' : isCanc ? 'red' : 'gold'} 
+                          className="font-bold text-xs uppercase px-2.5 py-0.5 rounded-full border-0 m-0"
+                        >
+                          {appt.status}
+                        </Tag>
+                      </div>
+
+                      <Divider className="my-2" />
+
+                      {/* Clean Notes / Reschedule Details */}
+                      <div>
+                        <div className="text-xs font-semibold text-slate-500 mb-1.5">Visit Information & Notes:</div>
+                        <AppointmentNotesDisplay 
+                          notes={appt.notes} 
+                          status={appt.status} 
+                          reason={appt.reason} 
+                          consultationType={appt.consultation_type}
+                          isDarkMode={isDarkMode} 
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : selectedSlotModal.type === 'available' ? (
+              <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-center space-y-1">
+                <CheckCircleOutlined className="text-2xl text-emerald-500" />
+                <div className="text-sm font-bold text-emerald-800 dark:text-emerald-200">Slot Available</div>
+                <div className="text-xs text-emerald-600 dark:text-emerald-400">
+                  This 1-hour slot is open and available in the doctor's weekly practice schedule.
+                </div>
+              </div>
+            ) : selectedSlotModal.type === 'blocked' ? (
+              <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-center space-y-1">
+                <StopOutlined className="text-2xl text-rose-500" />
+                <div className="text-sm font-bold text-rose-800 dark:text-rose-200">Slot Blocked</div>
+                <div className="text-xs text-rose-600 dark:text-rose-400">
+                  {selectedSlotModal.reason || 'Doctor is outstation or on leave during this time.'}
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 rounded-xl bg-slate-100 dark:bg-slate-800 text-center text-xs text-slate-500">
+                Outside practicing hours.
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

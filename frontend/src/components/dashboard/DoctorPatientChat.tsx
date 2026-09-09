@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, Typography, Input, Button, message, Upload, Spin, Popover, Avatar, Image } from 'antd';
-import { SendOutlined, PaperClipOutlined, DeleteOutlined, SmileOutlined, ArrowLeftOutlined, ClockCircleOutlined, CheckOutlined } from '@ant-design/icons';
+import { Card, Typography, Input, Button, message, Upload, Spin, Popover, Avatar, Image, Popconfirm } from 'antd';
+import { SendOutlined, PaperClipOutlined, DeleteOutlined, SmileOutlined, ArrowLeftOutlined, ClockCircleOutlined, CheckOutlined, StopOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { Message, User } from '../../types';
 import * as chatApi from '../../api/chat.api';
@@ -42,7 +42,7 @@ export const DoctorPatientChat: React.FC<DoctorPatientChatProps> = ({ currentUse
 
       setChatHistory(data);
       if (shouldScroll) {
-        scrollToBottom();
+        setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
       }
       
       // Mark messages as read
@@ -55,9 +55,9 @@ export const DoctorPatientChat: React.FC<DoctorPatientChatProps> = ({ currentUse
   useEffect(() => {
     setChatLoading(true);
     fetchChat(true).finally(() => setChatLoading(false));
-    const interval = setInterval(() => fetchChat(false), 5000);
+    const interval = setInterval(() => fetchChat(false), 3000);
     return () => clearInterval(interval);
-  }, [selectedPatient.id, currentUser.email]);
+  }, [selectedPatient.id]);
 
   const scrollToBottom = () => {
     setTimeout(() => {
@@ -65,44 +65,36 @@ export const DoctorPatientChat: React.FC<DoctorPatientChatProps> = ({ currentUse
     }, 100);
   };
 
-  const handleSendMessage = async (file?: File) => {
+  const handleSendMessage = async (file?: any) => {
     if (!messageInput.trim() && !file) return;
 
-    if (file && file.size > 5 * 1024 * 1024) {
-      message.error("File size exceeds the 5MB limit. Please upload a smaller file.");
-      return;
-    }
+    const tempContent = messageInput;
+    setMessageInput('');
 
-    const optimisticId = -Date.now();
-    const newMessage = {
+    const optimisticId = Date.now();
+    const optimisticMsg: Message & { is_sending?: boolean } = {
       id: optimisticId,
       sender_id: currentUser.id,
       receiver_id: selectedPatient.id,
-      content: messageInput.trim(),
-      timestamp: Date.now() / 1000,
-      is_read: 0,
-      is_deleted: 0,
+      content: tempContent,
       file_name: file ? file.name : null,
       file_type: file ? file.type : null,
+      timestamp: Math.floor(Date.now() / 1000),
+      is_deleted: 0,
+      is_read: 0,
       is_sending: true
     };
     
-    setChatHistory(prev => [...prev, newMessage]);
-    const currentInput = messageInput;
-    setMessageInput('');
-    scrollToBottom();
-
-    const formData = new FormData();
-    formData.append('email', currentUser.email);
-    formData.append('receiver_id', selectedPatient.id.toString());
-    if (currentInput.trim()) {
-      formData.append('content', currentInput.trim());
-    }
-    if (file) {
-      formData.append('file', file);
-    }
+    setChatHistory(prev => [...prev, optimisticMsg]);
+    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
 
     try {
+      const formData = new FormData();
+      formData.append('email', currentUser.email);
+      formData.append('receiver_id', selectedPatient.id.toString());
+      if (tempContent) formData.append('content', tempContent);
+      if (file) formData.append('file', file);
+
       await chatApi.sendMessage(formData);
       fetchChat(true);
     } catch (e: any) {
@@ -114,9 +106,9 @@ export const DoctorPatientChat: React.FC<DoctorPatientChatProps> = ({ currentUse
 
   const handleDeleteMessage = async (msgId: number) => {
     try {
-      await chatApi.deleteMessage({ message_id: msgId, sender_email: currentUser.email });
+      await chatApi.deleteMessage({ message_id: msgId, sender_email: currentUser.email, email: currentUser.email });
+      setChatHistory(prev => prev.map(m => m.id === msgId ? { ...m, is_deleted: 1, content: null, file_name: null, file_type: null } : m));
       message.success("Message deleted");
-      fetchChat();
     } catch (e: any) {
       console.error(e);
       message.error(e.message || "Failed to delete message");
@@ -188,9 +180,25 @@ export const DoctorPatientChat: React.FC<DoctorPatientChatProps> = ({ currentUse
                   </div>
                 )}
                 <div className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[70%] rounded-2xl p-3 relative group ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : (isDarkMode ? 'bg-slate-800 text-white rounded-tl-none' : 'bg-white border text-slate-800 rounded-tl-none')}`}>
+                  <div className={`max-w-[70%] rounded-2xl p-3 relative group transition-all ${
+                    msg.is_deleted
+                      ? (isDarkMode 
+                          ? 'bg-slate-900/70 border border-slate-800 text-slate-400 rounded-2xl shadow-none' 
+                          : 'bg-slate-100/90 border border-slate-200 text-slate-500 rounded-2xl shadow-none')
+                      : isMe 
+                        ? 'bg-blue-600 text-white rounded-tr-none shadow-xs' 
+                        : (isDarkMode ? 'bg-slate-800 text-white rounded-tl-none shadow-xs' : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none shadow-xs')
+                  }`}>
                     {msg.is_deleted ? (
-                      <Text className="italic text-slate-300">This message was deleted</Text>
+                      <div className="flex items-center gap-2 text-xs select-none">
+                        <StopOutlined className="text-slate-400 flex-shrink-0 text-sm" />
+                        <span className="italic">
+                          {isMe ? "You deleted this message" : "This message was deleted"}
+                        </span>
+                        <span className="text-[10px] ml-1.5 opacity-60 not-italic">
+                          {new Date(msg.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                        </span>
+                      </div>
                     ) : (
                       <>
                         {msg.content && <div>{msg.content}</div>}
@@ -223,8 +231,25 @@ export const DoctorPatientChat: React.FC<DoctorPatientChatProps> = ({ currentUse
                           )}
                         </div>
                         {isMe && !msg.is_sending && (
-                          <div className="absolute top-2 -left-8 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteMessage(msg.id)} />
+                          <div className="absolute top-2 -left-9 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Popconfirm
+                              title="Delete message?"
+                              description="Are you sure you want to delete this message?"
+                              onConfirm={() => handleDeleteMessage(msg.id)}
+                              okText="Delete"
+                              cancelText="Cancel"
+                              okButtonProps={{ danger: true, size: 'small' }}
+                              cancelButtonProps={{ size: 'small' }}
+                              placement="left"
+                            >
+                              <Button 
+                                type="text" 
+                                size="small" 
+                                danger 
+                                className="hover:bg-red-50 dark:hover:bg-red-950/40 rounded-full w-7 h-7 flex items-center justify-center p-0"
+                                icon={<DeleteOutlined />} 
+                              />
+                            </Popconfirm>
                           </div>
                         )}
                       </>

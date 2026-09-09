@@ -25,7 +25,7 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ handleFo
           { type: 'email', message: 'Please enter a valid email' }
         ]}
       >
-        <Input prefix={<MailOutlined className="text-slate-400" />} placeholder="john@example.com" />
+        <Input prefix={<MailOutlined className="text-slate-400" />} placeholder="john@example.com" allowClear />
       </Form.Item>
 
       <Form.Item className="mb-2">

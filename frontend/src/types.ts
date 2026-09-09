@@ -58,8 +58,8 @@ export interface LogEntry {
 export type ScreenState = 'IDLE' | 'INSTRUCTION' | 'PREPARATION' | 'COUNTDOWN' | 'SCREENING' | 'FINISHED';
 
 export interface AINotification {
-  id: string;
-  userId: number;
+  id: string | number;
+  userId?: number;
   title: string;
   message: string;
   timestamp: number;
@@ -120,6 +120,11 @@ export interface Appointment {
   time: string;
   status: 'pending' | 'confirmed' | 'cancelled' | 'completed';
   notes?: string;
+  reason?: string;
+  consultation_type?: 'online' | 'physical';
+  clinic_name?: string;
+  consultation_hours?: string;
+  specialization?: string;
   timestamp: number;
 }
 
@@ -140,7 +145,7 @@ export interface SkeletalFeedProps {
   screeningSeconds: number;
   isDarkMode: boolean;
   calibrationMode?: 'full' | 'half';
-  onCalibrationStatusChange?: (isOk: boolean, detail?: 'ok' | 'not_detected' | 'too_far' | 'too_close' | 'moving' | 'outside' | 'loading') => void;
+  onCalibrationStatusChange?: (isOk: boolean, detail?: 'ok' | 'not_detected' | 'too_far' | 'too_close' | 'moving' | 'outside' | 'loading' | 'side_profile') => void;
   sessionId?: string;
 }
 

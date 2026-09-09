@@ -43,7 +43,7 @@ export default function App() {
 
   if (currentUser.role === 'admin') {
     return (
-      <NotificationProvider userId={currentUser.id}>
+      <NotificationProvider user={currentUser}>
         <AdminDashboard
           currentUser={currentUser}
           handleLogout={handleLogout}
@@ -65,7 +65,7 @@ export default function App() {
       );
     }
     return (
-      <NotificationProvider userId={currentUser.id}>
+      <NotificationProvider user={currentUser}>
         <DoctorDashboard
           currentUser={currentUser}
           handleLogout={handleLogout}
@@ -77,7 +77,7 @@ export default function App() {
 
   // Default is PatientDashboard (role is 'general user' or fallback)
   return (
-    <NotificationProvider userId={currentUser.id}>
+    <NotificationProvider user={currentUser}>
       <PatientDashboard
         currentUser={currentUser}
         handleLogout={handleLogout}

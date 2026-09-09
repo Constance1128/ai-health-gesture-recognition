@@ -6,7 +6,7 @@ import { drawSkeleton, getJointsVariance, getFilteredConnections, drawPoseAngles
 import { PostureSnapshot, buildSnapshot } from '../utils/postureDiagnosis';
 import * as analysisApi from '../api/analysis.api';
 
-const checkCalibration = (landmarks: JointPoint[]): string => {
+const checkCalibration = (landmarks: JointPoint[]): 'ok' | 'not_detected' | 'too_far' | 'too_close' | 'moving' | 'outside' | 'loading' | 'side_profile' => {
   const leftShoulder = landmarks.find(l => l.name === 'left_shoulder');
   const rightShoulder = landmarks.find(l => l.name === 'right_shoulder');
   const leftHip = landmarks.find(l => l.name === 'left_hip');

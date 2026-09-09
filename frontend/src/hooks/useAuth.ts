@@ -9,9 +9,41 @@ export function useAuth(onLogoutCallback?: () => void) {
     return saved ? JSON.parse(saved) : null;
   });
 
-  const [authView, setAuthView] = useState<'login' | 'register' | 'forgot-password' | 'reset-password' | 'doctor-register'>('login');
-  const [resetToken, setResetToken] = useState<string>('');
-  const [resetEmail, setResetEmail] = useState<string>('');
+  const [resetToken, setResetToken] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('token') || '';
+  });
+  const [resetEmail, setResetEmail] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('email') || '';
+  });
+
+  const [authView, setAuthViewState] = useState<'login' | 'register' | 'forgot-password' | 'reset-password' | 'doctor-register'>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    const email = params.get('email');
+    if (token && email) {
+      return 'reset-password';
+    }
+    const saved = sessionStorage.getItem('auth_view');
+    if (saved && saved !== 'reset-password') {
+      return saved as any;
+    }
+    return 'login';
+  });
+
+  const setAuthView = (view: 'login' | 'register' | 'forgot-password' | 'reset-password' | 'doctor-register') => {
+    if (view === 'login') {
+      sessionStorage.removeItem('auth_view');
+      // Clean query params from URL if any remain
+      if (window.location.search) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    } else {
+      sessionStorage.setItem('auth_view', view);
+    }
+    setAuthViewState(view);
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -20,7 +52,9 @@ export function useAuth(onLogoutCallback?: () => void) {
     if (token && email) {
       setResetToken(token);
       setResetEmail(email);
-      setAuthView('reset-password');
+      setAuthViewState('reset-password');
+      // Clean query parameters from URL so subsequent refreshes don't re-lock to reset-password
+      window.history.replaceState({}, document.title, window.location.pathname);
     }
   }, []);
 
@@ -29,6 +63,7 @@ export function useAuth(onLogoutCallback?: () => void) {
       const data = await authApi.login(values);
       setCurrentUser(data);
       localStorage.setItem('user', JSON.stringify(data));
+      sessionStorage.removeItem('auth_view');
       message.success('Login successful!');
       return true;
     } catch (error: any) {
@@ -54,6 +89,16 @@ export function useAuth(onLogoutCallback?: () => void) {
     try {
       const data = await authApi.registerProfessional(formData);
       message.success(data.message || 'Registration submitted! Please wait for admin verification.');
+
+      // Automatically log in the registered doctor to redirect them to the PendingVerification screen
+      const email = formData.get('email') as string;
+      const password = formData.get('password') as string;
+      if (email && password) {
+        const loginData = await authApi.login({ email, password });
+        setCurrentUser(loginData);
+        localStorage.setItem('user', JSON.stringify(loginData));
+        sessionStorage.removeItem('auth_view');
+      }
       return true;
     } catch (error: any) {
       console.error('Registration error:', error);
@@ -82,9 +127,9 @@ export function useAuth(onLogoutCallback?: () => void) {
         password: values.password
       });
       message.success("Your password has been successfully reset! You can now log in.");
-      setAuthView('login');
       setResetToken('');
       setResetEmail('');
+      setAuthView('login');
       window.history.replaceState({}, document.title, window.location.pathname);
     } catch (err: any) {
       message.error(err.message || "Failed to reset password.");
@@ -94,6 +139,15 @@ export function useAuth(onLogoutCallback?: () => void) {
   const handleLogout = () => {
     setCurrentUser(null);
     localStorage.removeItem('user');
+    sessionStorage.removeItem('auth_view');
+    sessionStorage.removeItem('patient_dashboard_tab');
+    sessionStorage.removeItem('doctor_dashboard_nav');
+    sessionStorage.removeItem('admin_dashboard_nav');
+    sessionStorage.removeItem('dashboard_activeMode');
+    setAuthViewState('login');
+    if (window.location.search) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
     if (onLogoutCallback) {
       onLogoutCallback();
     }

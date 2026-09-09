@@ -72,7 +72,7 @@ export const LiveDetectionPanel: React.FC<LiveDetectionPanelProps> = ({
   const [cameraActive, setCameraActive] = useState<boolean>(true);
   const [calibrationMode, setCalibrationMode] = useState<'full' | 'half'>('full');
   const [isCalibrationOk, setIsCalibrationOk] = useState<boolean>(false);
-  const [calibrationDetail, setCalibrationDetail] = useState<'ok' | 'not_detected' | 'too_far' | 'too_close' | 'moving' | 'outside' | 'loading'>('not_detected');
+  const [calibrationDetail, setCalibrationDetail] = useState<'ok' | 'not_detected' | 'too_far' | 'too_close' | 'moving' | 'outside' | 'loading' | 'side_profile'>('not_detected');
   const [sessionId, setSessionId] = useState<string>(`capture_${Date.now()}`);
   // Ref so the onSnapshotsCollected callback always reads the latest analysisResult
   const analysisResultRef = React.useRef<any>(null);

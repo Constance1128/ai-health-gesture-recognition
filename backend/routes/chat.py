@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Body
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Body, Request
 from fastapi.responses import Response
 from typing import List, Dict, Any, Optional
 import os
@@ -70,16 +70,53 @@ async def chat_send(
     return msg
 
 @router.post("/delete")
-def chat_delete(email: str = Form(...), message_id: int = Form(...)):
-    """Deletes a message."""
-    user = get_user_by_email(email)
+@router.delete("/delete")
+async def chat_delete(request: Request):
+    """Deletes a message. Supports JSON body, Form data, and Query params."""
+    user_email = None
+    msg_id = None
+    
+    # 1. Check JSON body
+    try:
+        data = await request.json()
+        if isinstance(data, dict):
+            user_email = data.get("email") or data.get("sender_email")
+            msg_id = data.get("message_id")
+    except Exception:
+        pass
+
+    # 2. Check Form data
+    if not user_email or msg_id is None:
+        try:
+            form = await request.form()
+            user_email = user_email or form.get("email") or form.get("sender_email")
+            if form.get("message_id") is not None:
+                msg_id = form.get("message_id")
+        except Exception:
+            pass
+
+    # 3. Check Query params
+    if not user_email or msg_id is None:
+        user_email = user_email or request.query_params.get("email") or request.query_params.get("sender_email")
+        if request.query_params.get("message_id") is not None:
+            msg_id = request.query_params.get("message_id")
+
+    if not user_email or msg_id is None:
+        raise HTTPException(status_code=400, detail="Missing email or message_id.")
+
+    user = get_user_by_email(str(user_email))
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
-        
-    success = delete_message(message_id, user["id"])
+
+    try:
+        msg_id_int = int(msg_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid message_id.")
+
+    success = delete_message(msg_id_int, user["id"])
     if not success:
         raise HTTPException(status_code=400, detail="Could not delete message. Either it does not exist or you are not the sender.")
-        
+
     return {"message": "Message deleted successfully."}
 
 @router.get("/file/{message_id}")

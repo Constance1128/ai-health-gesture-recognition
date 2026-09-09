@@ -25,7 +25,7 @@ export const ResetPasswordView: React.FC<ResetPasswordViewProps> = ({ handleRese
           { min: 6, message: 'Password must be at least 6 characters' }
         ]}
       >
-        <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" />
+        <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" allowClear />
       </Form.Item>
 
       <Form.Item
@@ -44,7 +44,7 @@ export const ResetPasswordView: React.FC<ResetPasswordViewProps> = ({ handleRese
           }),
         ]}
       >
-        <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" />
+        <Input.Password prefix={<LockOutlined className="text-slate-400" />} placeholder="••••••••" allowClear />
       </Form.Item>
 
       <Form.Item className="mb-2">
