@@ -1114,9 +1114,6 @@ export const PatientDoctorDirectory: React.FC<PatientDoctorDirectoryProps> = ({ 
                         Official clinical observations, diagnosis, and treatment suggestions recorded by Dr. {selectedDoctor.name}.
                       </Text>
                     </div>
-                    <Tag color="blue" className="rounded-full text-xs font-semibold m-0">
-                      {patientConsultationNotes.length} notes
-                    </Tag>
                   </div>
 
                   {/* Filter bar */}
